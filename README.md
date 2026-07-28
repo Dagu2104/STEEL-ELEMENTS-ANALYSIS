@@ -1,47 +1,42 @@
-# Clasificación de perfiles de acero con Streamlit
+# Diseño de perfiles de acero
 
-Aplicación para seleccionar un perfil estándar, ingresar únicamente su geometría relevante y clasificar automáticamente sus elementos como rigidizados o no rigidizados conforme a los casos implementados de la Tabla B4.1a.
+Aplicación Streamlit para perfiles estándar de acero. Incluye:
 
-## Archivos
+- clasificación local de elementos en compresión según la Tabla B4.1a;
+- selección automática de la ruta del Capítulo E;
+- verificaciones E2, E3, E4, E5, E6 y E7 incorporadas progresivamente;
+- dibujo dinámico del perfil y del eje de análisis;
+- cálculo automático de propiedades geométricas desde las dimensiones ingresadas.
 
-- `app.py`: interfaz principal de Streamlit.
-- `funciones.py`: funciones de cálculo y validación.
-- `requirements.txt`: dependencias para Streamlit Community Cloud.
-- `.gitignore`: archivos que no deben subirse al repositorio.
+## Propiedades calculadas
+
+Para cada perfil se calculan, según corresponda:
+
+- área bruta `Ag`;
+- centroide `x̄`, `ȳ`;
+- `Ix`, `Iy`, `Ixy`;
+- radios de giro `rx`, `ry` y radios principales;
+- inercias principales y orientación de ejes principales;
+- módulos elásticos superior, inferior, derecho e izquierdo;
+- módulos plásticos `Zx` y `Zy`;
+- constante torsional `J`;
+- `Cw` aproximado únicamente para perfiles I doblemente simétricos.
+
+## Convenciones y limitaciones
+
+- Se ignoran radios de filete en perfiles abiertos.
+- Los tubos cuadrados y rectangulares se calculan con esquinas rectas. Para tubos `Rolled`, las propiedades son aproximadas porque no se incluyen los radios reales de esquina.
+- En canales, tees y ángulos todavía no se calculan automáticamente el centro de cortante ni `Cw`; cuando E4 los requiere, deben ingresarse.
+- En ángulos dobles se considera la separación libre entre las caras interiores y no se incluye el área de los separadores.
+- Para cubreplacas se distinguen el ancho total `Bcp`, usado en propiedades, y el ancho `b` entre líneas de conexión, usado en la Tabla B4.1a.
 
 ## Ejecución local
 
 ```bash
-python -m venv .venv
-```
-
-En Windows:
-
-```bash
-.venv\Scripts\activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Publicación en Streamlit Community Cloud
+## Streamlit Community Cloud
 
-1. Cree un repositorio en GitHub.
-2. Suba todos los archivos manteniéndolos en la raíz del repositorio.
-3. En Streamlit Community Cloud seleccione el repositorio, la rama y `app.py` como archivo principal.
-4. Pulse **Deploy**.
-
-## Alcance
-
-La aplicación trabaja con:
-
-- Perfil I Rolled y Built-up.
-- Canal.
-- Tee.
-- Ángulo simple.
-- Ángulo doble con separadores.
-- HSS cuadrado y rectangular.
-- HSS circular.
-
-El eje `x-x`, `y-y` o ambos se almacena como dato de configuración para futuras ampliaciones, pero no modifica la clasificación de esta tabla.
-
-> Verifique las definiciones geométricas y los límites con la edición de AISC aplicable al proyecto antes de emplear los resultados en un diseño definitivo.
+Sube los archivos a la raíz del repositorio y selecciona `app.py` como archivo principal.
