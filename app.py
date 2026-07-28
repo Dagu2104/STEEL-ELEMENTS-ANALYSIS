@@ -194,13 +194,15 @@ elif resultados:
 
     gobierna = max(resultados, key=lambda r: r.lambda_real / r.lambda_r)
     utilizacion = gobierna.lambda_real / gobierna.lambda_r
-    st.success(
-        f"Elemento más crítico: **{gobierna.elemento}**, "
-        f"con λ/λr = **{utilizacion:.3f}**."
-    ) if utilizacion <= 1.0 else st.warning(
+    mensaje_critico = (
         f"Elemento más crítico: **{gobierna.elemento}**, "
         f"con λ/λr = **{utilizacion:.3f}**."
     )
+
+    if utilizacion <= 1.0:
+        st.success(mensaje_critico)
+    else:
+        st.warning(mensaje_critico)
 
 st.divider()
 st.caption(
