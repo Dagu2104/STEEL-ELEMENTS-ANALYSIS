@@ -246,18 +246,30 @@ def mostrar_ruta_y_diseno_capitulo_e(perfil, resultados, E, Fy, geo, cubreplacas
     else:
         simetria = "Según ejes principales"
 
+    # E6 se detecta automáticamente. Solo aplica a perfiles formados por dos
+    # componentes completos interconectados a intervalos. En la lista actual,
+    # este caso corresponde únicamente al ángulo doble con separadores.
+    perfiles_e6 = {"Ángulo doble con separadores", "Canal doble", "Perfil I doble"}
+    aplica_e6 = perfil in perfiles_e6
+
     with st.expander("Ruta automática del Capítulo E", expanded=True):
-        es_builtup_miembro = st.checkbox(
-            "El miembro está compuesto por dos perfiles interconectados (aplica E6)",
-            value=(perfil == "Ángulo doble con separadores"),
-            help="No confundir con una sección cajón fabricada con cuatro placas. E6 corresponde a dos perfiles unidos a intervalos.",
-        )
         ruta = ruta_capitulo_e(
             perfil=perfil,
             resultados_locales=resultados,
             simetria=simetria,
-            miembro_builtup_dos_componentes=es_builtup_miembro,
+            miembro_builtup_dos_componentes=aplica_e6,
         )
+
+        if aplica_e6:
+            st.info(
+                "La aplicación detectó automáticamente un miembro formado por "
+                "dos perfiles interconectados. Por ello, corresponde revisar E6."
+            )
+        else:
+            st.caption(
+                "E6 no aplica: el perfil seleccionado no está formado por dos "
+                "perfiles completos interconectados a intervalos."
+            )
         c1, c2, c3 = st.columns(3)
         c1.metric("Clasificación global", "CON ELEMENTOS ESBELTOS" if ruta.tiene_elementos_esbeltos else "SIN ELEMENTOS ESBELTOS")
         c2.metric("Simetría", ruta.simetria)
