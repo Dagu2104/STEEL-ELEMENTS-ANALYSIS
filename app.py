@@ -5,6 +5,7 @@ from __future__ import annotations
 from html import escape
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from funciones import (
     evaluar_angulo,
@@ -171,24 +172,54 @@ def diagrama_perfil(perfil: str, eje: str) -> str:
 
 
 def mostrar_diagrama(perfil: str, eje: str) -> None:
-    st.markdown(
-        """
-        <style>
-        .profile-card {
-            border:1px solid rgba(128,128,128,.28);
-            border-radius:14px;
-            padding:0.8rem 1rem 0.9rem;
-            background:rgba(128,128,128,.035);
-            margin-bottom:1rem;
-        }
-        .profile-heading {font-size:1.05rem;font-weight:700;margin-bottom:.25rem;}
-        .profile-card svg {display:block;width:100%;max-width:720px;height:auto;margin:auto;}
-        .profile-note {text-align:center;font-size:.92rem;opacity:.85;margin-top:.2rem;}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(diagrama_perfil(perfil, eje), unsafe_allow_html=True)
+    """Renderiza el SVG como HTML real, no como texto Markdown."""
+    contenido = f"""
+    <!doctype html>
+    <html lang="es">
+    <head>
+      <meta charset="utf-8">
+      <style>
+        html, body {{
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            color: inherit;
+            font-family: Arial, sans-serif;
+        }}
+        .profile-card {{
+            box-sizing: border-box;
+            border: 1px solid rgba(128,128,128,.35);
+            border-radius: 14px;
+            padding: .8rem 1rem .9rem;
+            background: rgba(128,128,128,.035);
+            width: 100%;
+        }}
+        .profile-heading {{
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: .25rem;
+        }}
+        .profile-card svg {{
+            display: block;
+            width: 100%;
+            max-width: 720px;
+            height: 390px;
+            margin: auto;
+        }}
+        .profile-note {{
+            text-align: center;
+            font-size: .92rem;
+            opacity: .85;
+            margin-top: .2rem;
+        }}
+      </style>
+    </head>
+    <body>
+      {diagrama_perfil(perfil, eje)}
+    </body>
+    </html>
+    """
+    components.html(contenido, height=485, scrolling=False)
 
 
 st.title("Análisis de perfiles de acero")
