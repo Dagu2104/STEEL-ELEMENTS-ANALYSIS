@@ -241,97 +241,98 @@ def mostrar_diagrama(perfil: str, eje: str, geometria: dict[str, float]) -> None
 
 
 def cargar_geometria(perfil: str) -> tuple[dict[str, Any], str | None]:
-    """Muestra únicamente los controles geométricos aplicables al perfil."""
-    st.sidebar.subheader("Geometría")
+    """Muestra controles geométricos dentro de un panel retráctil."""
     fab: str | None = None
 
-    if perfil == "Perfil I":
-        fab = st.sidebar.selectbox(
-            "Fabricación", ["Rolled", "Built-up"],
-            help="Rolled: laminado. Built-up: armado con placas.",
-        )
-        return {
-            "bf": st.sidebar.number_input("Ancho total del patín bf", min_value=0.001, value=200.0),
-            "tf": st.sidebar.number_input("Espesor del patín tf", min_value=0.001, value=12.0),
-            "h": st.sidebar.number_input("Altura libre del alma h", min_value=0.001, value=450.0),
-            "tw": st.sidebar.number_input("Espesor del alma tw", min_value=0.001, value=8.0),
-        }, fab
+    with st.sidebar.expander("Geometría", expanded=True):
+        if perfil == "Perfil I":
+            fab = st.selectbox(
+                "Fabricación", ["Rolled", "Built-up"],
+                help="Rolled: laminado. Built-up: armado con placas.",
+            )
+            return {
+                "bf": st.number_input("Ancho total del patín bf", min_value=0.001, value=200.0),
+                "tf": st.number_input("Espesor del patín tf", min_value=0.001, value=12.0),
+                "h": st.number_input("Altura libre del alma h", min_value=0.001, value=450.0),
+                "tw": st.number_input("Espesor del alma tw", min_value=0.001, value=8.0),
+            }, fab
 
-    if perfil == "Canal":
+        if perfil == "Canal":
+            return {
+                "b_ala": st.number_input("Ancho saliente del patín b", min_value=0.001, value=70.0),
+                "tf": st.number_input("Espesor del patín tf", min_value=0.001, value=10.0),
+                "h": st.number_input("Altura libre del alma h", min_value=0.001, value=250.0),
+                "tw": st.number_input("Espesor del alma tw", min_value=0.001, value=7.0),
+            }, None
+
+        if perfil == "Tee":
+            return {
+                "b_ala": st.number_input("Ancho saliente de medio patín b", min_value=0.001, value=75.0),
+                "tf": st.number_input("Espesor del patín tf", min_value=0.001, value=12.0),
+                "d_vastago": st.number_input("Profundidad del vástago d", min_value=0.001, value=150.0),
+                "tw": st.number_input("Espesor del vástago tw", min_value=0.001, value=8.0),
+            }, "Rolled"
+
+        if perfil in {"Ángulo simple", "Ángulo doble con separadores"}:
+            return {
+                "b1": st.number_input("Ancho de la pata 1, b1", min_value=0.001, value=75.0),
+                "b2": st.number_input("Ancho de la pata 2, b2", min_value=0.001, value=75.0),
+                "t": st.number_input("Espesor t", min_value=0.001, value=8.0),
+            }, None
+
+        if perfil in {"HSS cuadrado", "HSS rectangular"}:
+            B = st.number_input("Ancho plano B", min_value=0.001, value=180.0)
+            if perfil == "HSS cuadrado":
+                H = B
+                st.caption("Para HSS cuadrado se adopta H = B automáticamente.")
+            else:
+                H = st.number_input("Altura plana H", min_value=0.001, value=280.0)
+            return {
+                "B_plano": B,
+                "H_plano": H,
+                "t": st.number_input("Espesor de diseño t", min_value=0.001, value=8.0),
+            }, None
+
         return {
-            "b_ala": st.sidebar.number_input("Ancho saliente del patín b", min_value=0.001, value=70.0),
-            "tf": st.sidebar.number_input("Espesor del patín tf", min_value=0.001, value=10.0),
-            "h": st.sidebar.number_input("Altura libre del alma h", min_value=0.001, value=250.0),
-            "tw": st.sidebar.number_input("Espesor del alma tw", min_value=0.001, value=7.0),
+            "D": st.number_input("Diámetro exterior D", min_value=0.001, value=200.0),
+            "t": st.number_input("Espesor de diseño t", min_value=0.001, value=8.0),
         }, None
-
-    if perfil == "Tee":
-        return {
-            "b_ala": st.sidebar.number_input("Ancho saliente de medio patín b", min_value=0.001, value=75.0),
-            "tf": st.sidebar.number_input("Espesor del patín tf", min_value=0.001, value=12.0),
-            "d_vastago": st.sidebar.number_input("Profundidad del vástago d", min_value=0.001, value=150.0),
-            "tw": st.sidebar.number_input("Espesor del vástago tw", min_value=0.001, value=8.0),
-        }, "Rolled"
-
-    if perfil in {"Ángulo simple", "Ángulo doble con separadores"}:
-        return {
-            "b1": st.sidebar.number_input("Ancho de la pata 1, b1", min_value=0.001, value=75.0),
-            "b2": st.sidebar.number_input("Ancho de la pata 2, b2", min_value=0.001, value=75.0),
-            "t": st.sidebar.number_input("Espesor t", min_value=0.001, value=8.0),
-        }, None
-
-    if perfil in {"HSS cuadrado", "HSS rectangular"}:
-        B = st.sidebar.number_input("Ancho plano B", min_value=0.001, value=180.0)
-        if perfil == "HSS cuadrado":
-            H = B
-            st.sidebar.caption("Para HSS cuadrado se adopta H = B automáticamente.")
-        else:
-            H = st.sidebar.number_input("Altura plana H", min_value=0.001, value=280.0)
-        return {
-            "B_plano": B,
-            "H_plano": H,
-            "t": st.sidebar.number_input("Espesor de diseño t", min_value=0.001, value=8.0),
-        }, None
-
-    return {
-        "D": st.sidebar.number_input("Diámetro exterior D", min_value=0.001, value=200.0),
-        "t": st.sidebar.number_input("Espesor de diseño t", min_value=0.001, value=8.0),
-    }, None
-
 
 st.title("Análisis de perfiles de acero")
 st.caption("Verificación de perfiles estándar según el tipo de solicitación")
 
-st.sidebar.header("Configuración general")
-perfil = st.sidebar.selectbox(
-    "Tipo de perfil",
-    ["Perfil I", "Canal", "Tee", "Ángulo simple", "Ángulo doble con separadores", "HSS cuadrado", "HSS rectangular", "HSS circular"],
-)
-eje = st.sidebar.radio(
-    "Eje de análisis",
-    ["x-x", "y-y"],
-    help="Solo se dibuja el eje seleccionado. La dirección de flexión se representa perpendicular a ese eje.",
-)
+st.sidebar.header("Configuración")
 
-st.sidebar.subheader("Material")
-unidades = st.sidebar.selectbox("Sistema de esfuerzo", ["MPa", "ksi"])
-if unidades == "MPa":
-    E_predeterminado, Fy_predeterminado = 200_000.0, 345.0
-else:
-    E_predeterminado, Fy_predeterminado = 29_000.0, 50.0
+with st.sidebar.expander("Configuración general", expanded=True):
+    perfil = st.selectbox(
+        "Tipo de perfil",
+        ["Perfil I", "Canal", "Tee", "Ángulo simple", "Ángulo doble con separadores", "HSS cuadrado", "HSS rectangular", "HSS circular"],
+    )
+    eje = st.radio(
+        "Eje de análisis",
+        ["x-x", "y-y"],
+        help="Solo se dibuja el eje seleccionado. La dirección de flexión se representa perpendicular a ese eje.",
+    )
 
-E = st.sidebar.number_input(
-    f"Módulo de elasticidad E [{unidades}]",
-    min_value=0.001,
-    value=E_predeterminado,
-    step=1000.0 if unidades == "MPa" else 100.0,
-)
-Fy = st.sidebar.number_input(
-    f"Esfuerzo de fluencia Fy [{unidades}]",
-    min_value=0.001,
-    value=Fy_predeterminado,
-    step=5.0,
-)
+with st.sidebar.expander("Material", expanded=False):
+    unidades = st.selectbox("Sistema de esfuerzo", ["MPa", "ksi"])
+    if unidades == "MPa":
+        E_predeterminado, Fy_predeterminado = 200_000.0, 345.0
+    else:
+        E_predeterminado, Fy_predeterminado = 29_000.0, 50.0
+
+    E = st.number_input(
+        f"Módulo de elasticidad E [{unidades}]",
+        min_value=0.001,
+        value=E_predeterminado,
+        step=1000.0 if unidades == "MPa" else 100.0,
+    )
+    Fy = st.number_input(
+        f"Esfuerzo de fluencia Fy [{unidades}]",
+        min_value=0.001,
+        value=Fy_predeterminado,
+        step=5.0,
+    )
 
 geometria, fabricacion = cargar_geometria(perfil)
 
