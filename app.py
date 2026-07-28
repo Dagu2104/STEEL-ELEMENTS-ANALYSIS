@@ -24,6 +24,7 @@ from capitulo_e import (
 
 
 from propiedades import calcular_propiedades, PropiedadesSeccion
+from unidades import a_interno, desde_interno, unidad_propiedad
 
 from funciones import (
     evaluar_angulo,
@@ -35,6 +36,56 @@ from funciones import (
 )
 
 st.set_page_config(page_title="Diseño de perfiles de acero", page_icon="🏗️", layout="wide")
+
+
+# -----------------------------------------------------------------------------
+# Entradas y salidas con conversión automática de unidades
+# -----------------------------------------------------------------------------
+def entrada_magnitud(label: str, *, key: str, magnitud: str, unidad: str,
+                      valor_inicial_interno: float, min_interno: float | None = None,
+                      max_interno: float | None = None, potencia: int = 1,
+                      help: str | None = None) -> float:
+    """Muestra una entrada en la unidad elegida y devuelve el valor interno.
+
+    El valor interno se conserva al cambiar de unidad; por ejemplo, 3000 mm se
+    transforma automáticamente en 3 m y no en 3000 m.
+    """
+    base_key = f"_base_{key}"
+    unit_key = f"_unit_{key}"
+    widget_key = f"_widget_{key}"
+    if base_key not in st.session_state:
+        st.session_state[base_key] = float(valor_inicial_interno)
+    if st.session_state.get(unit_key) != (unidad, potencia):
+        st.session_state[widget_key] = desde_interno(
+            st.session_state[base_key], magnitud, unidad, potencia
+        )
+        st.session_state[unit_key] = (unidad, potencia)
+    # Ajusta el valor visible si cambian límites dinámicos, por ejemplo b <= Bcp.
+    if min_interno is not None:
+        minimo_visible = desde_interno(min_interno, magnitud, unidad, potencia)
+        st.session_state[widget_key] = max(st.session_state[widget_key], minimo_visible)
+    if max_interno is not None:
+        maximo_visible = desde_interno(max_interno, magnitud, unidad, potencia)
+        st.session_state[widget_key] = min(st.session_state[widget_key], maximo_visible)
+    kwargs = {"key": widget_key, "help": help}
+    if min_interno is not None:
+        kwargs["min_value"] = desde_interno(min_interno, magnitud, unidad, potencia)
+    if max_interno is not None:
+        kwargs["max_value"] = desde_interno(max_interno, magnitud, unidad, potencia)
+    valor_visible = st.number_input(f"{label} [{unidad_propiedad(unidad, potencia) if magnitud == 'longitud' else unidad}]", **kwargs)
+    valor_base = a_interno(valor_visible, magnitud, unidad, potencia)
+    st.session_state[base_key] = valor_base
+    return valor_base
+
+
+def valor_mostrado(valor_interno: float, magnitud: str, unidad: str, potencia: int = 1) -> float:
+    return desde_interno(valor_interno, magnitud, unidad, potencia)
+
+
+def formato(valor_interno: float, magnitud: str, unidad: str, potencia: int = 1, decimales: int = 3) -> str:
+    valor = valor_mostrado(valor_interno, magnitud, unidad, potencia)
+    etiqueta = unidad_propiedad(unidad, potencia) if magnitud == "longitud" else unidad
+    return f"{valor:,.{decimales}f} {etiqueta}"
 
 
 # -----------------------------------------------------------------------------
@@ -165,39 +216,44 @@ def dibujo_perfil(perfil: str, eje: str, geo: dict, fabricacion: str | None = No
     """
 
 
-def mostrar_propiedades(prop: PropiedadesSeccion, unidades_longitud: str) -> None:
-    """Presenta propiedades geométricas calculadas automáticamente."""
-    u = unidades_longitud
+def mostrar_propiedades(prop: PropiedadesSeccion, unidad_longitud: str) -> None:
+    """Presenta propiedades internas en la unidad de longitud seleccionada."""
+    u1 = unidad_propiedad(unidad_longitud, 1)
+    u2 = unidad_propiedad(unidad_longitud, 2)
+    u3 = unidad_propiedad(unidad_longitud, 3)
+    u4 = unidad_propiedad(unidad_longitud, 4)
+    u6 = unidad_propiedad(unidad_longitud, 6)
+    cv = lambda v, p=1: valor_mostrado(v, "longitud", unidad_longitud, p)
     with st.expander("Propiedades geométricas calculadas", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Área Ag", f"{prop.Ag:,.3f} {u}²")
-        c2.metric("Centroide x̄", f"{prop.x_bar:,.3f} {u}")
-        c3.metric("Centroide ȳ", f"{prop.y_bar:,.3f} {u}")
-        c4.metric("J", f"{prop.J:,.3f} {u}⁴")
+        c1.metric("Área Ag", f"{cv(prop.Ag,2):,.3f} {u2}")
+        c2.metric("Centroide x̄", f"{cv(prop.x_bar):,.3f} {u1}")
+        c3.metric("Centroide ȳ", f"{cv(prop.y_bar):,.3f} {u1}")
+        c4.metric("J", f"{cv(prop.J,4):,.3f} {u4}")
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Ix", f"{prop.Ix:,.3f} {u}⁴")
-        c2.metric("Iy", f"{prop.Iy:,.3f} {u}⁴")
-        c3.metric("Ixy", f"{prop.Ixy:,.3f} {u}⁴")
-        c4.metric("Cw", "No calculado" if prop.Cw is None else f"{prop.Cw:,.3f} {u}⁶")
+        c1.metric("Ix", f"{cv(prop.Ix,4):,.3f} {u4}")
+        c2.metric("Iy", f"{cv(prop.Iy,4):,.3f} {u4}")
+        c3.metric("Ixy", f"{cv(prop.Ixy,4):,.3f} {u4}")
+        c4.metric("Cw", "No calculado" if prop.Cw is None else f"{cv(prop.Cw,6):,.3f} {u6}")
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("rx", f"{prop.rx:,.3f} {u}")
-        c2.metric("ry", f"{prop.ry:,.3f} {u}")
-        c3.metric("r máximo", f"{prop.r1:,.3f} {u}")
-        c4.metric("r mínimo", f"{prop.r2:,.3f} {u}")
+        c1.metric("rx", f"{cv(prop.rx):,.3f} {u1}")
+        c2.metric("ry", f"{cv(prop.ry):,.3f} {u1}")
+        c3.metric("r máximo", f"{cv(prop.r1):,.3f} {u1}")
+        c4.metric("r mínimo", f"{cv(prop.r2):,.3f} {u1}")
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Sx superior", f"{prop.Sx_sup:,.3f} {u}³")
-        c2.metric("Sx inferior", f"{prop.Sx_inf:,.3f} {u}³")
-        c3.metric("Sy derecha", f"{prop.Sy_der:,.3f} {u}³")
-        c4.metric("Sy izquierda", f"{prop.Sy_izq:,.3f} {u}³")
+        c1.metric("Sx superior", f"{cv(prop.Sx_sup,3):,.3f} {u3}")
+        c2.metric("Sx inferior", f"{cv(prop.Sx_inf,3):,.3f} {u3}")
+        c3.metric("Sy derecha", f"{cv(prop.Sy_der,3):,.3f} {u3}")
+        c4.metric("Sy izquierda", f"{cv(prop.Sy_izq,3):,.3f} {u3}")
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Zx", f"{prop.Zx:,.3f} {u}³")
-        c2.metric("Zy", f"{prop.Zy:,.3f} {u}³")
-        c3.metric("I principal mayor", f"{prop.I1:,.3f} {u}⁴")
-        c4.metric("I principal menor", f"{prop.I2:,.3f} {u}⁴")
+        c1.metric("Zx", f"{cv(prop.Zx,3):,.3f} {u3}")
+        c2.metric("Zy", f"{cv(prop.Zy,3):,.3f} {u3}")
+        c3.metric("I principal mayor", f"{cv(prop.I1,4):,.3f} {u4}")
+        c4.metric("I principal menor", f"{cv(prop.I2,4):,.3f} {u4}")
 
         st.write(f"**Ángulo del eje principal:** {prop.theta_p_deg:.3f}°")
         if prop.observacion:
@@ -230,15 +286,19 @@ def mostrar_resultados(resultados):
 
 def mostrar_ruta_y_diseno_capitulo_e(
     perfil, resultados, E, Fy, geo, cubreplacas_grafico, prop,
-    unidades_esfuerzo: str, unidades_longitud: str,
+    unidad_esfuerzo: str, unidad_longitud: str, unidad_fuerza: str, unidad_momento: str,
 ):
-    """Muestra la ruta E1.1 y ejecuta E2/E3/E4/E7 con unidades explícitas."""
-    uF = unidades_esfuerzo
-    uL = unidades_longitud
-    uA = f"{uL}²"
-    uI = f"{uL}⁴"
-    uCw = f"{uL}⁶"
-    uP = "N" if uF == "MPa" else "kip"
+    """Muestra la ruta E1.1 y ejecuta E2/E3/E4/E7 en unidades internas."""
+    uF = unidad_esfuerzo
+    uL = unidad_longitud
+    uP = unidad_fuerza
+    uM = unidad_momento
+    uA = unidad_propiedad(uL, 2)
+    uI = unidad_propiedad(uL, 4)
+    uCw = unidad_propiedad(uL, 6)
+    cvL = lambda v, p=1: valor_mostrado(v, "longitud", uL, p)
+    cvF = lambda v: valor_mostrado(v, "esfuerzo", uF)
+    cvP = lambda v: valor_mostrado(v, "fuerza", uP)
     if perfil == "Perfil I":
         sup = cubreplacas_grafico.get("superior")
         inf = cubreplacas_grafico.get("inferior")
@@ -263,8 +323,8 @@ def mostrar_ruta_y_diseno_capitulo_e(
 
     st.info(
         f"**Unidades activas:** longitudes en **{uL}**, áreas en **{uA}**, "
-        f"inercias y J en **{uI}**, Cw en **{uCw}**, esfuerzos en **{uF}** "
-        f"y fuerzas en **{uP}**. Las relaciones λ, λr y Lc/r son adimensionales."
+        f"inercias y J en **{uI}**, Cw en **{uCw}**, esfuerzos en **{uF}**, "
+        f"fuerzas en **{uP}** y momentos en **{uM}**. Las relaciones λ, λr y Lc/r son adimensionales."
     )
 
     with st.expander("Ruta automática del Capítulo E", expanded=True):
@@ -297,17 +357,17 @@ def mostrar_ruta_y_diseno_capitulo_e(
         st.info("Ag, rx, ry, Ix, Iy y J se toman automáticamente de la geometría ingresada.")
         Ag, rx, ry = prop.Ag, prop.rx, prop.ry
         a, b, c = st.columns(3)
-        a.metric("Área bruta Ag", f"{Ag:,.3f} {uA}")
-        b.metric("Radio de giro rx", f"{rx:,.3f} {uL}")
-        c.metric("Radio de giro ry", f"{ry:,.3f} {uL}")
+        a.metric("Área bruta Ag", f"{cvL(Ag,2):,.3f} {uA}")
+        b.metric("Radio de giro rx", f"{cvL(rx):,.3f} {uL}")
+        c.metric("Radio de giro ry", f"{cvL(ry):,.3f} {uL}")
         a, b, c, d = st.columns(4)
-        Lx = a.number_input(f"Longitud no arriostrada Lx [{uL}]", min_value=0.001, value=3000.0, key="Lx_E")
+        Lx = entrada_magnitud("Longitud no arriostrada Lx", key="Lx_E", magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001)
         Kx = b.number_input("Factor Kx", min_value=0.001, value=1.0, key="Kx_E")
-        Ly = c.number_input(f"Longitud no arriostrada Ly [{uL}]", min_value=0.001, value=3000.0, key="Ly_E")
+        Ly = entrada_magnitud("Longitud no arriostrada Ly", key="Ly_E", magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001)
         Ky = d.number_input("Factor Ky", min_value=0.001, value=1.0, key="Ky_E")
         Lcx, Lcy = longitud_efectiva(Kx, Lx), longitud_efectiva(Ky, Ly)
         st.write(
-            f"**Lcx = {Lcx:.3f} {uL}** · **Lcy = {Lcy:.3f} {uL}** · "
+            f"**Lcx = {cvL(Lcx):.3f} {uL}** · **Lcy = {cvL(Lcy):.3f} {uL}** · "
             f"**Lcx/rx = {Lcx/rx:.3f}** · **Lcy/ry = {Lcy/ry:.3f}**"
         )
         if max(Lcx/rx, Lcy/ry) > 200:
@@ -322,12 +382,12 @@ def mostrar_ruta_y_diseno_capitulo_e(
                     st.markdown(f"**{r.modo} alrededor de {r.eje}**")
                     q1,q2,q3,q4=st.columns(4)
                     q1.metric("Lc/r", f"{r.esbeltez:.3f}")
-                    q2.metric("Fe", f"{r.Fe:.3f} {uF}")
-                    q3.metric("Fn", f"{r.Fn:.3f} {uF}")
-                    q4.metric("Pn", f"{r.Pn:.3f} {uP}")
+                    q2.metric("Fe", f"{cvF(r.Fe):.3f} {uF}")
+                    q3.metric("Fn", f"{cvF(r.Fn):.3f} {uF}")
+                    q4.metric("Pn", f"{cvP(r.Pn):.3f} {uP}")
                     st.caption(f"Fn por {r.ecuacion_fn}; {r.observacion}")
             gob = min((res_x,res_y), key=lambda r:r.Pn)
-            st.warning(f"Gobierna E3 alrededor de **{gob.eje}**, con Pn = **{gob.Pn:.3f} {uP}**.")
+            st.warning(f"Gobierna E3 alrededor de **{gob.eje}**, con Pn = **{cvP(gob.Pn):.3f} {uP}**.")
         except ValueError as exc:
             st.error(str(exc))
 
@@ -335,19 +395,19 @@ def mostrar_ruta_y_diseno_capitulo_e(
         activar_e4 = st.checkbox("Calcular E4", value=("E4" in ruta.secciones), key="activar_E4")
         if activar_e4:
             G0 = 77200.0 if E > 1000 else 11200.0
-            G = st.number_input(f"Módulo de corte G [{uF}]", min_value=0.001, value=G0, key="G_E4")
+            G = entrada_magnitud("Módulo de corte G", key="G_E4", magnitud="esfuerzo", unidad=uF, valor_inicial_interno=G0, min_interno=0.001)
             Ix, Iy, J = prop.Ix, prop.Iy, prop.J
             q1,q2,q3,q4 = st.columns(4)
-            q1.metric("Ix automático", f"{Ix:,.3f} {uI}")
-            q2.metric("Iy automático", f"{Iy:,.3f} {uI}")
-            q3.metric("J automático", f"{J:,.3f} {uI}")
+            q1.metric("Ix automático", f"{cvL(Ix,4):,.3f} {uI}")
+            q2.metric("Iy automático", f"{cvL(Iy,4):,.3f} {uI}")
+            q3.metric("J automático", f"{cvL(J,4):,.3f} {uI}")
             if prop.Cw is None:
-                Cw = q4.number_input(f"Cw (requiere ingreso) [{uCw}]", min_value=0.0, value=0.0, key="Cw_E4")
+                Cw = entrada_magnitud("Cw (requiere ingreso)", key="Cw_E4", magnitud="longitud", unidad=uL, potencia=6, valor_inicial_interno=0.0, min_interno=0.0)
             else:
                 Cw = prop.Cw
-                q4.metric("Cw automático", f"{Cw:,.3f} {uCw}")
+                q4.metric("Cw automático", f"{cvL(Cw,6):,.3f} {uCw}")
             q1,q2 = st.columns(2)
-            Lz = q1.number_input(f"Longitud torsional no arriostrada Lz [{uL}]", min_value=0.001, value=max(Lx,Ly), key="Lz_E4")
+            Lz = entrada_magnitud("Longitud torsional no arriostrada Lz", key="Lz_E4", magnitud="longitud", unidad=uL, valor_inicial_interno=max(Lx,Ly), min_interno=0.001)
             Kz = q2.number_input("Factor Kz", min_value=0.001, value=1.0, key="Kz_E4")
             Lcz = Kz*Lz
             try:
@@ -356,8 +416,8 @@ def mostrar_ruta_y_diseno_capitulo_e(
                     modo="Pandeo torsional"
                 else:
                     q1,q2=st.columns(2)
-                    x0=q1.number_input(f"x0: centro de cortante respecto al centroide [{uL}]", value=0.0, key="x0_E4")
-                    y0=q2.number_input(f"y0: centro de cortante respecto al centroide [{uL}]", value=20.0, key="y0_E4")
+                    x0=entrada_magnitud("x0: centro de cortante respecto al centroide", key="x0_E4", magnitud="longitud", unidad=uL, valor_inicial_interno=0.0)
+                    y0=entrada_magnitud("y0: centro de cortante respecto al centroide", key="y0_E4", magnitud="longitud", unidad=uL, valor_inicial_interno=20.0)
                     r0=radio_polar_centro_cortante(x0=x0,y0=y0,Ix=Ix,Iy=Iy,Ag=Ag)
                     Hf=1-(x0*x0+y0*y0)/(r0*r0)
                     # Para canal con eje x de simetría, la nota indica reemplazar Fey por Fex.
@@ -367,9 +427,9 @@ def mostrar_ruta_y_diseno_capitulo_e(
                     modo="Pandeo flexotorsional"
                 r4=pandeo_torsional_o_flexotorsional(modo=modo,Fe=Fe4,Fy=Fy,Ag=Ag)
                 q1,q2,q3=st.columns(3)
-                q1.metric("Fe E4",f"{r4.Fe:.3f} {uF}")
-                q2.metric("Fn",f"{r4.Fn:.3f} {uF}")
-                q3.metric("Pn",f"{r4.Pn:.3f} {uP}")
+                q1.metric("Fe E4",f"{cvF(r4.Fe):.3f} {uF}")
+                q2.metric("Fn",f"{cvF(r4.Fn):.3f} {uF}")
+                q3.metric("Pn",f"{cvP(r4.Pn):.3f} {uP}")
                 st.caption(f"Fn por {r4.ecuacion_fn}. Comparar Pn de E4 con Pn de E3 y adoptar el menor.")
             except ValueError as exc:
                 st.error(str(exc))
@@ -386,7 +446,7 @@ def mostrar_ruta_y_diseno_capitulo_e(
                 st.metric("Esbeltez efectiva Lc/r según E5", f"{esb_e5:.3f}")
                 Fe_e5 = 3.141592653589793**2 * E / esb_e5**2
                 Fn_e5, eq_e5 = esfuerzo_nominal_compresion(Fy, Fe_e5)
-                st.write(f"**Fe = {Fe_e5:.3f} {uF}**, **Fn = {Fn_e5:.3f} {uF}** por **{eq_e5}**.")
+                st.write(f"**Fe = {cvF(Fe_e5):.3f} {uF}**, **Fn = {cvF(Fn_e5):.3f} {uF}** por **{eq_e5}**.")
             except ValueError as exc:
                 st.error(str(exc))
 
@@ -395,8 +455,8 @@ def mostrar_ruta_y_diseno_capitulo_e(
             st.info("Esta sección corresponde a dos perfiles unidos mediante conectores intermedios; no es la fabricación de un cajón con cuatro placas continuas.")
             tipo_con = st.selectbox("Conectores intermedios", ["pernos snug-tight", "soldado o pernos pretensionados"], key="con_E6")
             esb_global = st.number_input("Esbeltez global (Lc/r)o", min_value=0.001, value=max(Lcx/rx,Lcy/ry), key="esb_global_E6")
-            a_e6 = st.number_input(f"Separación entre conectores a [{uL}]", min_value=0.001, value=300.0, key="a_E6")
-            ri_e6 = st.number_input(f"Radio mínimo del componente individual ri [{uL}]", min_value=0.001, value=20.0, key="ri_E6")
+            a_e6 = entrada_magnitud("Separación entre conectores a", key="a_E6", magnitud="longitud", unidad=uL, valor_inicial_interno=300.0, min_interno=0.001)
+            ri_e6 = entrada_magnitud("Radio mínimo del componente individual ri", key="ri_E6", magnitud="longitud", unidad=uL, valor_inicial_interno=20.0, min_interno=0.001)
             Ki_e6 = st.number_input("Ki", min_value=0.001, value=0.50, key="Ki_E6", help="0.50 ángulos espalda con espalda; 0.75 canales; 0.86 otros casos.")
             try:
                 esb_mod, eq_e6 = esbeltez_modificada_builtup(tipo_conector=tipo_con, esbeltez_global=esb_global, a=a_e6, ri=ri_e6, Ki=Ki_e6)
@@ -408,12 +468,12 @@ def mostrar_ruta_y_diseno_capitulo_e(
     if ruta.tiene_elementos_esbeltos:
         with st.expander("E7 — Miembros con elementos esbeltos", expanded=True):
             st.info("E7 usa Fn obtenido de E3 o E4. Seleccione el menor Fn global antes de calcular el área efectiva.")
-            Fn_global = st.number_input(f"Fn global para E7 [{uF}]", min_value=0.001, value=min(res_x.Fn,res_y.Fn), key="Fn_E7")
+            Fn_global = entrada_magnitud("Fn global para E7", key="Fn_E7", magnitud="esfuerzo", unidad=uF, valor_inicial_interno=min(res_x.Fn,res_y.Fn), min_interno=0.001)
             if perfil == "Tubo circular":
                 try:
                     Ae,eq=area_efectiva_tubo_circular(D=geo["D"],t=geo["t"],E=E,Fy=Fy,Ag=Ag)
-                    st.write(f"**Ae = {Ae:.3f} {uA}** por **{eq}**")
-                    st.metric("Pn = Fn·Ae",f"{Fn_global*Ae:.3f} {uP}")
+                    st.write(f"**Ae = {cvL(Ae,2):.3f} {uA}** por **{eq}**")
+                    st.metric("Pn = Fn·Ae",f"{cvP(Fn_global*Ae):.3f} {uP}")
                 except ValueError as exc:
                     st.error(str(exc))
             else:
@@ -424,8 +484,8 @@ def mostrar_ruta_y_diseno_capitulo_e(
                     with st.container(border=True):
                         st.markdown(f"**{r.elemento}**")
                         q1,q2,q3=st.columns(3)
-                        b_el=q1.number_input(f"b [{uL}]",min_value=0.001,value=max(1.0,r.lambda_real),key=f"b_E7_{i}")
-                        t_el=q2.number_input(f"t [{uL}]",min_value=0.001,value=1.0,key=f"t_E7_{i}")
+                        b_el=entrada_magnitud("b", key=f"b_E7_{i}", magnitud="longitud", unidad=uL, valor_inicial_interno=max(1.0,r.lambda_real), min_interno=0.001)
+                        t_el=entrada_magnitud("t", key=f"t_E7_{i}", magnitud="longitud", unidad=uL, valor_inicial_interno=1.0, min_interno=0.001)
                         mult=q3.number_input("Multiplicidad",min_value=1,value=1,step=1,key=f"m_E7_{i}")
                         if "Pared" in r.elemento and perfil in {"Tubo cuadrado","Tubo rectangular"}:
                             tipo_e7="pared de tubo cuadrado o rectangular"
@@ -434,13 +494,13 @@ def mostrar_ruta_y_diseno_capitulo_e(
                         else:
                             tipo_e7="otro elemento"
                         be,Fel,c1,eq=ancho_efectivo_e7(b=b_el,t=t_el,lambda_r=r.lambda_r,Fy=Fy,Fn=Fn_global,tipo_elemento=tipo_e7)
-                        st.caption(f"Tipo E7.1: {tipo_e7}; be = {be:.3f} {uL}; Fel = {Fel:.3f} {uF}; {eq}.")
+                        st.caption(f"Tipo E7.1: {tipo_e7}; be = {cvL(be):.3f} {uL}; Fel = {cvF(Fel):.3f} {uF}; {eq}.")
                         elementos.append({"nombre":r.elemento,"b":b_el,"t":t_el,"be":be,"multiplicidad":mult})
                 if elementos:
                     try:
                         Ae,detalle=area_efectiva_desde_elementos(Ag=Ag,elementos=elementos)
-                        st.metric("Área efectiva Ae",f"{Ae:.3f} {uA}")
-                        st.metric("Resistencia nominal Pn = Fn·Ae",f"{Fn_global*Ae:.3f} {uP}")
+                        st.metric("Área efectiva Ae",f"{cvL(Ae,2):.3f} {uA}")
+                        st.metric("Resistencia nominal Pn = Fn·Ae",f"{cvP(Fn_global*Ae):.3f} {uP}")
                     except ValueError as exc:
                         st.error(str(exc))
 
@@ -448,6 +508,21 @@ def mostrar_ruta_y_diseno_capitulo_e(
 # Barra lateral
 # -----------------------------------------------------------------------------
 st.sidebar.title("Datos del perfil")
+
+with st.sidebar.expander("Unidades", expanded=True):
+    unidad_longitud = st.selectbox("Longitud", ["mm", "cm", "m", "in", "ft"], index=0)
+    unidad_esfuerzo = st.selectbox("Esfuerzo", ["MPa", "kPa", "kgf/cm²", "ksi"], index=0)
+    unidad_fuerza = st.selectbox("Fuerza", ["N", "kN", "kgf", "tf", "kip"], index=1)
+    unidad_momento = st.selectbox(
+        "Momento",
+        ["N·mm", "N·m", "kN·m", "kgf·m", "tf·m", "kip·in", "kip·ft"],
+        index=2,
+    )
+    st.caption(
+        "Los cálculos internos usan mm, MPa, N y N·mm. Al cambiar una unidad, "
+        "los valores ya ingresados se convierten automáticamente."
+    )
+
 with st.sidebar.expander("Configuración general", expanded=True):
     perfil = st.selectbox("Tipo de perfil", [
         "Perfil I", "Canal", "Tee", "Ángulo simple", "Ángulo doble con separadores",
@@ -456,15 +531,16 @@ with st.sidebar.expander("Configuración general", expanded=True):
     eje = st.radio("Eje de análisis", ["x-x", "y-y"], help="Se conserva para flexión y flexocompresión.")
 
 with st.sidebar.expander("Material", expanded=False):
-    unidades = st.selectbox("Sistema de esfuerzo", ["MPa", "ksi"])
-    unidades_longitud = "mm" if unidades == "MPa" else "in"
-    E0, Fy0 = (200000.0, 345.0) if unidades == "MPa" else (29000.0, 50.0)
-    E = st.number_input(f"Módulo de elasticidad E [{unidades}]", min_value=0.001, value=E0)
-    Fy = st.number_input(f"Esfuerzo de fluencia Fy [{unidades}]", min_value=0.001, value=Fy0)
-    fuerza_unidad = "N" if unidades == "MPa" else "kip"
+    E = entrada_magnitud(
+        "Módulo de elasticidad E", key="material_E", magnitud="esfuerzo",
+        unidad=unidad_esfuerzo, valor_inicial_interno=200000.0, min_interno=0.001,
+    )
+    Fy = entrada_magnitud(
+        "Esfuerzo de fluencia Fy", key="material_Fy", magnitud="esfuerzo",
+        unidad=unidad_esfuerzo, valor_inicial_interno=345.0, min_interno=0.001,
+    )
     st.caption(
-        f"Resultados: longitudes en {unidades_longitud}, esfuerzos en {unidades} "
-        f"y fuerzas en {fuerza_unidad}."
+        f"E y Fy se muestran en {unidad_esfuerzo}; las resistencias se presentarán en {unidad_fuerza}."
     )
 
 geo: dict[str, float] = {}
@@ -473,12 +549,19 @@ cubreplacas_grafico: dict = {}
 cubreplacas_calculo: list[dict[str, object]] = []
 
 with st.sidebar.expander("Geometría", expanded=True):
+    U = unidad_longitud
+    def gl(label, key, default, minimo=0.001, maximo=None):
+        return entrada_magnitud(
+            label, key=key, magnitud="longitud", unidad=U,
+            valor_inicial_interno=default, min_interno=minimo, max_interno=maximo,
+        )
+
     if perfil == "Perfil I":
         fabricacion = st.selectbox("Fabricación", ["Rolled", "Built-up"])
-        geo["bf"] = st.number_input(f"Ancho total del patín bf [{unidades_longitud}]", min_value=0.001, value=200.0)
-        geo["tf"] = st.number_input(f"Espesor del patín tf [{unidades_longitud}]", min_value=0.001, value=12.0)
-        geo["h"] = st.number_input(f"Altura libre del alma h [{unidades_longitud}]", min_value=0.001, value=450.0)
-        geo["tw"] = st.number_input(f"Espesor del alma tw [{unidades_longitud}]", min_value=0.001, value=8.0)
+        geo["bf"] = gl("Ancho total del patín bf", "geo_i_bf", 200.0)
+        geo["tf"] = gl("Espesor del patín tf", "geo_i_tf", 12.0)
+        geo["h"] = gl("Altura libre del alma h", "geo_i_h", 450.0)
+        geo["tw"] = gl("Espesor del alma tw", "geo_i_tw", 8.0)
 
         tiene_cp = st.checkbox("Incluir cubreplaca(s) de ala — Caso 7")
         if tiene_cp:
@@ -490,9 +573,9 @@ with st.sidebar.expander("Geometría", expanded=True):
 
             if ubicacion in {"Solo superior", "Ambas alas"}:
                 st.markdown("**Cubreplaca superior**")
-                B_sup = st.number_input(f"Ancho total Bcp — superior [{unidades_longitud}]", min_value=0.001, value=180.0, key="B_cp_sup")
-                b_sup = st.number_input(f"Ancho entre líneas b — superior [{unidades_longitud}]", min_value=0.001, value=160.0, max_value=B_sup, key="b_cp_sup")
-                t_sup = st.number_input(f"Espesor tcp — superior [{unidades_longitud}]", min_value=0.001, value=10.0, key="t_cp_sup")
+                B_sup = gl("Ancho total Bcp — superior", "B_cp_sup", 180.0)
+                b_sup = gl("Ancho entre líneas b — superior", "b_cp_sup", 160.0, maximo=B_sup)
+                t_sup = gl("Espesor tcp — superior", "t_cp_sup", 10.0)
                 cubreplacas_grafico["superior"] = {"B": B_sup, "b": b_sup, "t": t_sup}
                 cubreplacas_calculo.append({"nombre": "Cubreplaca superior", "b": b_sup, "t": t_sup, "conexion": conexion})
 
@@ -502,43 +585,43 @@ with st.sidebar.expander("Geometría", expanded=True):
                     st.caption("La cubreplaca inferior adopta las mismas dimensiones que la superior.")
                 else:
                     st.markdown("**Cubreplaca inferior**")
-                    B_inf = st.number_input(f"Ancho total Bcp — inferior [{unidades_longitud}]", min_value=0.001, value=180.0, key="B_cp_inf")
-                    b_inf = st.number_input(f"Ancho entre líneas b — inferior [{unidades_longitud}]", min_value=0.001, value=160.0, max_value=B_inf, key="b_cp_inf")
-                    t_inf = st.number_input(f"Espesor tcp — inferior [{unidades_longitud}]", min_value=0.001, value=10.0, key="t_cp_inf")
+                    B_inf = gl("Ancho total Bcp — inferior", "B_cp_inf", 180.0)
+                    b_inf = gl("Ancho entre líneas b — inferior", "b_cp_inf", 160.0, maximo=B_inf)
+                    t_inf = gl("Espesor tcp — inferior", "t_cp_inf", 10.0)
                 cubreplacas_grafico["inferior"] = {"B": B_inf, "b": b_inf, "t": t_inf}
                 cubreplacas_calculo.append({"nombre": "Cubreplaca inferior", "b": b_inf, "t": t_inf, "conexion": conexion})
 
     elif perfil == "Canal":
         fabricacion = "Rolled"
-        geo["b"] = st.number_input(f"Ancho saliente del patín b [{unidades_longitud}]", min_value=0.001, value=70.0)
-        geo["tf"] = st.number_input(f"Espesor del patín tf [{unidades_longitud}]", min_value=0.001, value=10.0)
-        geo["h"] = st.number_input(f"Altura libre del alma h [{unidades_longitud}]", min_value=0.001, value=250.0)
-        geo["tw"] = st.number_input(f"Espesor del alma tw [{unidades_longitud}]", min_value=0.001, value=7.0)
+        geo["b"] = gl("Ancho saliente del patín b", "geo_c_b", 70.0)
+        geo["tf"] = gl("Espesor del patín tf", "geo_c_tf", 10.0)
+        geo["h"] = gl("Altura libre del alma h", "geo_c_h", 250.0)
+        geo["tw"] = gl("Espesor del alma tw", "geo_c_tw", 7.0)
     elif perfil == "Tee":
         fabricacion = "Rolled"
-        geo["b"] = st.number_input(f"Ancho saliente de media ala b [{unidades_longitud}]", min_value=0.001, value=75.0)
-        geo["tf"] = st.number_input(f"Espesor del patín tf [{unidades_longitud}]", min_value=0.001, value=12.0)
-        geo["d"] = st.number_input(f"Profundidad del vástago d [{unidades_longitud}]", min_value=0.001, value=150.0)
-        geo["tw"] = st.number_input(f"Espesor del vástago tw [{unidades_longitud}]", min_value=0.001, value=8.0)
+        geo["b"] = gl("Ancho saliente de media ala b", "geo_t_b", 75.0)
+        geo["tf"] = gl("Espesor del patín tf", "geo_t_tf", 12.0)
+        geo["d"] = gl("Profundidad del vástago d", "geo_t_d", 150.0)
+        geo["tw"] = gl("Espesor del vástago tw", "geo_t_tw", 8.0)
     elif perfil in {"Ángulo simple", "Ángulo doble con separadores"}:
-        geo["b1"] = st.number_input(f"Ancho de pata 1 b1 [{unidades_longitud}]", min_value=0.001, value=75.0)
-        geo["b2"] = st.number_input(f"Ancho de pata 2 b2 [{unidades_longitud}]", min_value=0.001, value=75.0)
-        geo["t"] = st.number_input(f"Espesor t [{unidades_longitud}]", min_value=0.001, value=8.0)
+        geo["b1"] = gl("Ancho de pata 1 b1", f"geo_{perfil}_b1", 75.0)
+        geo["b2"] = gl("Ancho de pata 2 b2", f"geo_{perfil}_b2", 75.0)
+        geo["t"] = gl("Espesor t", f"geo_{perfil}_t", 8.0)
         if perfil == "Ángulo doble con separadores":
-            geo["separacion"] = st.number_input(f"Separación libre entre ángulos [{unidades_longitud}]", min_value=0.0, value=20.0)
+            geo["separacion"] = gl("Separación libre entre ángulos", "geo_ad_sep", 20.0, minimo=0.0)
     elif perfil in {"Tubo cuadrado", "Tubo rectangular"}:
         fabricacion = st.selectbox("Fabricación", ["Rolled", "Built-up"], help="Rolled → caso 6; Built-up con placas soldadas → caso 8.")
-        geo["B"] = st.number_input(f"Ancho exterior B [{unidades_longitud}]", min_value=0.001, value=200.0)
+        geo["B"] = gl("Ancho exterior B", f"geo_{perfil}_B", 200.0)
         if perfil == "Tubo cuadrado":
             geo["H"] = geo["B"]
             st.caption("Para tubo cuadrado se adopta H = B.")
         else:
-            geo["H"] = st.number_input(f"Altura exterior H [{unidades_longitud}]", min_value=0.001, value=300.0)
-        geo["t"] = st.number_input(f"Espesor t [{unidades_longitud}]", min_value=0.001, value=8.0)
+            geo["H"] = gl("Altura exterior H", "geo_tr_H", 300.0)
+        geo["t"] = gl("Espesor t", f"geo_{perfil}_t", 8.0)
     else:
         fabricacion = "Rolled"
-        geo["D"] = st.number_input(f"Diámetro exterior D [{unidades_longitud}]", min_value=0.001, value=200.0)
-        geo["t"] = st.number_input(f"Espesor t [{unidades_longitud}]", min_value=0.001, value=8.0)
+        geo["D"] = gl("Diámetro exterior D", "geo_tc_D", 200.0)
+        geo["t"] = gl("Espesor t", "geo_tc_t", 8.0)
 
 
 # -----------------------------------------------------------------------------
@@ -587,8 +670,8 @@ if error is None and error_propiedades:
 
 st.title("Verificación de perfiles estándar de acero")
 st.caption(
-    f"Sistema activo: geometría en {unidades_longitud}, esfuerzos en {unidades} y "
-    f"fuerzas en {'N' if unidades == 'MPa' else 'kip'}."
+    f"Unidades seleccionadas: longitud {unidad_longitud}, esfuerzo {unidad_esfuerzo}, "
+    f"fuerza {unidad_fuerza} y momento {unidad_momento}."
 )
 
 tab_axial, tab_flexion, tab_interaccion = st.tabs(["Carga axial", "Flexión", "Flexocompresión"])
@@ -602,7 +685,7 @@ for tab, titulo in [
         st.header(titulo)
         components.html(dibujo_perfil(perfil, eje, geo, fabricacion, cubreplacas_grafico), height=455, scrolling=False)
         if propiedades is not None:
-            mostrar_propiedades(propiedades, unidades_longitud)
+            mostrar_propiedades(propiedades, unidad_longitud)
         if tab is tab_axial:
             st.info("En esta pestaña el eje de análisis no modifica la Tabla B4.1a; se muestra y se guarda para verificaciones posteriores.")
             if error:
@@ -611,7 +694,7 @@ for tab, titulo in [
                 mostrar_resultados(resultados)
                 mostrar_ruta_y_diseno_capitulo_e(
                     perfil, resultados, E, Fy, geo, cubreplacas_grafico,
-                    propiedades, unidades, unidades_longitud,
+                    propiedades, unidad_esfuerzo, unidad_longitud, unidad_fuerza, unidad_momento,
                 )
         else:
             st.info("Las propiedades geométricas ya se calculan automáticamente. La resistencia de flexión y las ecuaciones de interacción se incorporarán en los módulos siguientes.")

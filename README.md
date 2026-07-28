@@ -40,3 +40,7 @@ streamlit run app.py
 ## Streamlit Community Cloud
 
 Sube los archivos a la raíz del repositorio y selecciona `app.py` como archivo principal.
+
+## Unidades personalizadas
+
+La barra lateral permite seleccionar independientemente las unidades de longitud, esfuerzo, fuerza y momento. El programa conserva un sistema interno consistente (`mm`, `MPa`, `N`, `N·mm`) y convierte automáticamente los valores ya ingresados cuando se cambia una unidad.
