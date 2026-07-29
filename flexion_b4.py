@@ -43,6 +43,13 @@ def calcular_kc(h: float, tw: float) -> float:
     return _limitar(4.0 / sqrt(h / tw), 0.35, 0.76)
 
 
+def _dimensiones_i(geo: dict) -> tuple[float, float, float, float, float, float]:
+    if "bf_superior" in geo:
+        return (geo["bf_superior"], geo["tf_superior"],
+                geo["bf_inferior"], geo["tf_inferior"], geo["h"], geo["tw"])
+    return geo["bf"], geo["tf"], geo["bf"], geo["tf"], geo["h"], geo["tw"]
+
+
 def clasificar_flexion(lambda_real: float, lambda_p: float, lambda_r: float) -> str:
     for nombre, valor in {
         "lambda real": lambda_real,
@@ -81,7 +88,7 @@ def _resultado(
 
 def _pna_horizontal_perfil_i(geo: dict, cubreplacas: dict | None) -> float:
     """Eje neutro plástico horizontal medido desde la cara inferior extrema."""
-    bf, tf, h, tw = geo["bf"], geo["tf"], geo["h"], geo["tw"]
+    bf_sup, tf_sup, bf_inf, tf_inf, h, tw = _dimensiones_i(geo)
     cp = cubreplacas or {}
     t_inf = float(cp.get("inferior", {}).get("t", 0.0))
     t_sup = float(cp.get("superior", {}).get("t", 0.0))
@@ -94,12 +101,12 @@ def _pna_horizontal_perfil_i(geo: dict, cubreplacas: dict | None) -> float:
         rects.append((0.0, t_inf, b_inf))
     y0 = t_inf
     rects.extend([
-        (y0, tf, bf),
-        (y0 + tf, h, tw),
-        (y0 + tf + h, tf, bf),
+        (y0, tf_inf, bf_inf),
+        (y0 + tf_inf, h, tw),
+        (y0 + tf_inf + h, tf_sup, bf_sup),
     ])
     if t_sup > 0:
-        rects.append((y0 + 2.0 * tf + h, t_sup, b_sup))
+        rects.append((y0 + tf_inf + h + tf_sup, t_sup, b_sup))
 
     area_total = sum(alto * ancho for _, alto, ancho in rects)
     objetivo = area_total / 2.0
@@ -122,21 +129,21 @@ def _limites_caso16(
     lado_compresion: str,
 ) -> tuple[float, float, str]:
     """Caso 16 para alma de sección I monosimétrica en flexión mayor."""
-    bf, tf, h, tw = geo["bf"], geo["tf"], geo["h"], geo["tw"]
+    bf_sup, tf_sup, bf_inf, tf_inf, h, tw = _dimensiones_i(geo)
     cp = cubreplacas or {}
     t_inf = float(cp.get("inferior", {}).get("t", 0.0))
     t_sup = float(cp.get("superior", {}).get("t", 0.0))
-    altura_total = h + 2.0 * tf + t_inf + t_sup
+    altura_total = h + tf_inf + tf_sup + t_inf + t_sup
     y_bar = propiedades.y_bar
     yp = _pna_horizontal_perfil_i(geo, cp)
 
     if lado_compresion == "Superior":
-        cara_interior = t_inf + tf + h
+        cara_interior = t_inf + tf_inf + h
         c_comp = altura_total - y_bar
         Sxc = propiedades.Sx_sup
         Sxt = propiedades.Sx_inf
     else:
-        cara_interior = t_inf + tf
+        cara_interior = t_inf + tf_inf
         c_comp = y_bar
         Sxc = propiedades.Sx_inf
         Sxt = propiedades.Sx_sup
@@ -183,18 +190,27 @@ def evaluar_flexion_b4(
     resultados: list[ResultadoFlexionB4] = []
     cp = cubreplacas or {}
 
-    if perfil == "Perfil I":
-        bf, tf, h, tw = geo["bf"], geo["tf"], geo["h"], geo["tw"]
+    if perfil in {"Perfil I", "Perfil I asimétrico"}:
+        bf_sup, tf_sup, bf_inf, tf_inf, h, tw = _dimensiones_i(geo)
         if eje == "y-y":
-            resultados.append(_resultado(
-                perfil=perfil, elemento="Patines en flexión alrededor de y-y", caso=13,
-                relacion="bf/(2·tf)", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
-                lam=bf/(2.0*tf), lp=0.38*raiz, lr=1.00*raiz,
-                observacion="Caso de alas de perfiles I en flexión respecto al eje menor.",
-            ))
+            resultados.extend([
+                _resultado(
+                    perfil=perfil, elemento="Patín superior en flexión alrededor de y-y", caso=13,
+                    relacion="bf_sup/(2·tf_sup)", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+                    lam=bf_sup/(2.0*tf_sup), lp=0.38*raiz, lr=1.00*raiz,
+                    observacion="Ala de perfil I en flexión respecto al eje menor.",
+                ),
+                _resultado(
+                    perfil=perfil, elemento="Patín inferior en flexión alrededor de y-y", caso=13,
+                    relacion="bf_inf/(2·tf_inf)", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+                    lam=bf_inf/(2.0*tf_inf), lp=0.38*raiz, lr=1.00*raiz,
+                    observacion="Ala de perfil I en flexión respecto al eje menor.",
+                ),
+            ])
             return resultados
 
-        # Flexión mayor x-x.
+        # Flexión mayor x-x: solo el patín del lado comprimido gobierna la clasificación del ala.
+        bf_comp, tf_comp = ((bf_sup, tf_sup) if lado_compresion == "Superior" else (bf_inf, tf_inf))
         if fabricacion == "Built-up":
             kc = calcular_kc(h, tw)
             Sxc = propiedades.Sx_sup if lado_compresion == "Superior" else propiedades.Sx_inf
@@ -203,27 +219,28 @@ def evaluar_flexion_b4(
             FL = 0.7 * Fy if razon >= 0.7 else max(0.5 * Fy, Fy * razon)
             resultados.append(_resultado(
                 perfil=perfil, elemento=f"Patín {lado_compresion.lower()} comprimido", caso=11,
-                relacion="bf/(2·tf)", formula_p="0.38·√(E/Fy)", formula_r="0.95·√(kc·E/FL)",
-                lam=bf/(2.0*tf), lp=0.38*raiz, lr=0.95*sqrt(kc*E/FL),
+                relacion="bf_comp/(2·tf_comp)", formula_p="0.38·√(E/Fy)", formula_r="0.95·√(kc·E/FL)",
+                lam=bf_comp/(2.0*tf_comp), lp=0.38*raiz, lr=0.95*sqrt(kc*E/FL),
                 observacion=f"kc={kc:.3f}; FL={FL:.3f}; Sxt/Sxc={razon:.3f}.",
             ))
         else:
             resultados.append(_resultado(
                 perfil=perfil, elemento=f"Patín {lado_compresion.lower()} comprimido", caso=10,
-                relacion="bf/(2·tf)", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
-                lam=bf/(2.0*tf), lp=0.38*raiz, lr=1.00*raiz,
+                relacion="bf_comp/(2·tf_comp)", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+                lam=bf_comp/(2.0*tf_comp), lp=0.38*raiz, lr=1.00*raiz,
             ))
 
         # Se considera monosimétrico si las cubreplacas no son iguales y simétricas.
         sup = cp.get("superior")
         inf = cp.get("inferior")
-        doble_simetria = (
+        geometria_simetrica = abs(bf_sup-bf_inf) < 1e-9 and abs(tf_sup-tf_inf) < 1e-9
+        doble_simetria = geometria_simetrica and ((
             not sup and not inf
         ) or (
             sup and inf
             and abs(float(sup.get("B", sup.get("b"))) - float(inf.get("B", inf.get("b")))) < 1e-9
             and abs(float(sup["t"]) - float(inf["t"])) < 1e-9
-        )
+        ))
         if doble_simetria:
             resultados.append(_resultado(
                 perfil=perfil, elemento="Alma", caso=15, relacion="h/tw",
@@ -239,7 +256,7 @@ def evaluar_flexion_b4(
                 perfil=perfil, elemento="Alma de sección I monosimétrica", caso=16,
                 relacion="hc/tw", formula_p="(hc/hp)·√(E/Fy)/(0.54·Mp/My−0.09)²",
                 formula_r="5.70·√(E/Fy)",
-                lam=(2.0*abs((geo["tf"] + (geo["h"] if lado_compresion == "Superior" else 0.0)) - propiedades.y_bar))/tw,
+                lam=(2.0*abs(((tf_inf + h) if lado_compresion == "Superior" else tf_inf) - propiedades.y_bar))/tw,
                 lp=lp, lr=lr, observacion=obs,
             ))
 

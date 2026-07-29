@@ -172,6 +172,76 @@ def evaluar_perfil_i(
     return resultados
 
 
+
+def evaluar_perfil_i_asimetrico(
+    *,
+    fabricacion: str,
+    bf_superior: float,
+    tf_superior: float,
+    bf_inferior: float,
+    tf_inferior: float,
+    h: float,
+    tw: float,
+    E: float,
+    Fy: float,
+    cubreplacas: list[dict[str, object]] | None = None,
+) -> list[ResultadoElemento]:
+    """Tabla B4.1a para una sección I monosimétrica con patines diferentes."""
+    datos = {
+        "bf superior": bf_superior, "tf superior": tf_superior,
+        "bf inferior": bf_inferior, "tf inferior": tf_inferior,
+        "h": h, "tw": tw, "E": E, "Fy": Fy,
+    }
+    for nombre, valor in datos.items():
+        validar_positivo(nombre, valor)
+    if fabricacion not in {"Rolled", "Built-up"}:
+        raise ValueError("La fabricación debe ser 'Rolled' o 'Built-up'.")
+
+    raiz = sqrt(E / Fy)
+    if fabricacion == "Rolled":
+        lr_ala = 0.56 * raiz
+        formula = "0.56·√(E/Fy)"
+        caso = "Caso 1"
+        observacion = "Ala de perfil I Rolled."
+    else:
+        kc = calcular_kc(h, tw)
+        lr_ala = 0.64 * sqrt(kc * E / Fy)
+        formula = "0.64·√(kc·E/Fy)"
+        caso = "Caso 2"
+        observacion = f"Ala de perfil I Built-up; kc = {kc:.3f}."
+
+    resultados = [
+        crear_resultado(
+            perfil="Perfil I asimétrico", elemento="Patín superior",
+            condicion_borde="No rigidizado", caso_tabla=caso, formula=formula,
+            relacion="bf_sup/(2·tf_sup)",
+            lambda_real=bf_superior/(2.0*tf_superior), lambda_r=lr_ala,
+            observacion=observacion,
+        ),
+        crear_resultado(
+            perfil="Perfil I asimétrico", elemento="Patín inferior",
+            condicion_borde="No rigidizado", caso_tabla=caso, formula=formula,
+            relacion="bf_inf/(2·tf_inf)",
+            lambda_real=bf_inferior/(2.0*tf_inferior), lambda_r=lr_ala,
+            observacion=observacion,
+        ),
+        crear_resultado(
+            perfil="Perfil I asimétrico", elemento="Alma",
+            condicion_borde="Rigidizado", caso_tabla="Caso 5",
+            formula="1.49·√(E/Fy)", relacion="h/tw",
+            lambda_real=h/tw, lambda_r=1.49*raiz,
+            observacion="El alma está rigidizada por ambos patines.",
+        ),
+    ]
+    for cp in cubreplacas or []:
+        resultados.append(evaluar_cubreplaca(
+            perfil="Perfil I asimétrico con cubreplaca",
+            nombre=str(cp["nombre"]), b=float(cp["b"]), t=float(cp["t"]),
+            E=E, Fy=Fy, conexion=str(cp["conexion"]),
+        ))
+    return resultados
+
+
 def evaluar_canal(*, b_ala: float, tf: float, h: float, tw: float, E: float, Fy: float) -> list[ResultadoElemento]:
     for nombre, valor in {"b_ala": b_ala, "tf": tf, "h": h, "tw": tw, "E": E, "Fy": Fy}.items():
         validar_positivo(nombre, valor)

@@ -31,6 +31,7 @@ from funciones import (
     evaluar_angulo,
     evaluar_canal,
     evaluar_perfil_i,
+    evaluar_perfil_i_asimetrico,
     evaluar_tee,
     evaluar_tubo_circular,
     evaluar_tubo_rectangular,
@@ -114,22 +115,30 @@ def dibujo_perfil(perfil: str, eje: str, geo: dict, fabricacion: str | None = No
         f = fill_override or fill
         shapes.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="{rx}" fill="{f}" stroke="{stroke}" stroke-width="3"/>')
 
-    if perfil == "Perfil I":
-        bf, tf, h, tw = geo["bf"], geo["tf"], geo["h"], geo["tw"]
-        maxdim = max(bf, h + 2 * tf)
-        bw = escala(bf, maxdim, 240, 80)
-        th = escala(tf, maxdim, 240, 8)
+    if perfil in {"Perfil I", "Perfil I asimétrico"}:
+        if perfil == "Perfil I asimétrico":
+            bf_sup, tf_sup = geo["bf_superior"], geo["tf_superior"]
+            bf_inf, tf_inf = geo["bf_inferior"], geo["tf_inferior"]
+        else:
+            bf_sup = bf_inf = geo["bf"]
+            tf_sup = tf_inf = geo["tf"]
+        h, tw = geo["h"], geo["tw"]
+        maxdim = max(bf_sup, bf_inf, h + tf_sup + tf_inf)
+        bw_sup = escala(bf_sup, maxdim, 240, 80)
+        bw_inf = escala(bf_inf, maxdim, 240, 80)
+        th_sup = escala(tf_sup, maxdim, 240, 8)
+        th_inf = escala(tf_inf, maxdim, 240, 8)
         wh = escala(h, maxdim, 240, 90)
         ww = escala(tw, maxdim, 240, 6)
-        x = cx - bw / 2
-        y = cy - (wh + 2 * th) / 2
-        rect(x, y, bw, th)
-        rect(cx - ww / 2, y + th, ww, wh)
-        rect(x, y + th + wh, bw, th)
+        x_sup, x_inf = cx-bw_sup/2, cx-bw_inf/2
+        y = cy-(wh+th_sup+th_inf)/2
+        rect(x_sup, y, bw_sup, th_sup)
+        rect(cx-ww/2, y+th_sup, ww, wh)
+        rect(x_inf, y+th_sup+wh, bw_inf, th_inf)
         labels += [
-            f'<text x="{x+bw+12:.1f}" y="{y+th/2+5:.1f}" class="label">Patín superior</text>',
+            f'<text x="{x_sup+bw_sup+12:.1f}" y="{y+th_sup/2+5:.1f}" class="label">Patín superior</text>',
             f'<text x="{cx+ww/2+12:.1f}" y="{cy+5:.1f}" class="label">Alma</text>',
-            f'<text x="{x+bw+12:.1f}" y="{y+th+wh+th/2+5:.1f}" class="label">Patín inferior</text>',
+            f'<text x="{x_inf+bw_inf+12:.1f}" y="{y+th_sup+wh+th_inf/2+5:.1f}" class="label">Patín inferior</text>',
         ]
         cp = cubreplacas or {}
         if cp.get("superior"):
@@ -142,8 +151,9 @@ def dibujo_perfil(perfil: str, eje: str, geo: dict, fabricacion: str | None = No
             bcp, tcp = cp["inferior"].get("B", cp["inferior"]["b"]), cp["inferior"]["t"]
             cpw = escala(bcp, max(maxdim, bcp), 240, 45)
             cpt = escala(tcp, max(maxdim, bcp), 240, 5)
-            rect(cx-cpw/2, y+2*th+wh+4, cpw, cpt, fill_override=cp_fill)
-            labels.append(f'<text x="{cx-cpw/2:.1f}" y="{y+2*th+wh+cpt+24:.1f}" class="cp-label">Cubreplaca inferior</text>')
+            y_inf_cp = y + th_sup + wh + th_inf + 4
+            rect(cx-cpw/2, y_inf_cp, cpw, cpt, fill_override=cp_fill)
+            labels.append(f'<text x="{cx-cpw/2:.1f}" y="{y_inf_cp+cpt+20:.1f}" class="cp-label">Cubreplaca inferior</text>')
 
     elif perfil == "Canal":
         b, tf, h, tw = geo["b"], geo["tf"], geo["h"], geo["tw"]
@@ -329,6 +339,35 @@ def mostrar_resultados_flexion(resultados):
     st.caption("Esta pestaña solo aplica la Tabla B4.1b. No calcula resistencia a flexión ni aplica el Capítulo F.")
 
 
+
+def datos_fisicos_e7(perfil: str, elemento: str, geo: dict, cubreplacas: dict, fabricacion: str | None) -> tuple[float, float, int]:
+    """Devuelve b, t y multiplicidad física automática para E7."""
+    e = elemento.lower()
+    if perfil == "Perfil I":
+        if "alma" in e: return geo["h"], geo["tw"], 1
+        if "patín" in e or "ala" in e: return geo["bf"]/2.0, geo["tf"], 2
+    if perfil == "Perfil I asimétrico":
+        if "alma" in e: return geo["h"], geo["tw"], 1
+        if "superior" in e: return geo["bf_superior"]/2.0, geo["tf_superior"], 1
+        if "inferior" in e: return geo["bf_inferior"]/2.0, geo["tf_inferior"], 1
+    if "cubreplaca superior" in e:
+        q=cubreplacas["superior"]; return float(q["b"]), float(q["t"]), 1
+    if "cubreplaca inferior" in e:
+        q=cubreplacas["inferior"]; return float(q["b"]), float(q["t"]), 1
+    if perfil == "Canal":
+        return (geo["h"], geo["tw"], 1) if "alma" in e else (geo["b"], geo["tf"], 2)
+    if perfil == "Tee":
+        return (geo["d"], geo["tw"], 1) if "vástago" in e else (geo["b"], geo["tf"], 2)
+    if perfil in {"Ángulo simple", "Ángulo doble con separadores"}:
+        mult=2 if perfil == "Ángulo doble con separadores" else 1
+        return (geo["b1"], geo["t"], mult) if "pata 1" in e else (geo["b2"], geo["t"], mult)
+    if perfil in {"Tubo cuadrado", "Tubo rectangular"}:
+        descuento=3.0*geo["t"] if fabricacion == "Rolled" else 2.0*geo["t"]
+        if "horizontal" in e: return geo["B"]-descuento, geo["t"], 2
+        return geo["H"]-descuento, geo["t"], 2
+    raise ValueError(f"No se pudieron determinar automáticamente b, t y multiplicidad para {elemento}.")
+
+
 def mostrar_ruta_y_diseno_capitulo_e(
     perfil, resultados, E, Fy, geo, cubreplacas_grafico, prop,
     unidad_esfuerzo: str, unidad_longitud: str, unidad_fuerza: str, unidad_momento: str,
@@ -344,12 +383,16 @@ def mostrar_ruta_y_diseno_capitulo_e(
     cvL = lambda v, p=1: valor_mostrado(v, "longitud", uL, p)
     cvF = lambda v: valor_mostrado(v, "esfuerzo", uF)
     cvP = lambda v: valor_mostrado(v, "fuerza", uP)
-    if perfil == "Perfil I":
+    if perfil in {"Perfil I", "Perfil I asimétrico"}:
         sup = cubreplacas_grafico.get("superior")
         inf = cubreplacas_grafico.get("inferior")
-        if not sup and not inf:
+        geometria_simetrica = perfil == "Perfil I" or (
+            abs(geo["bf_superior"]-geo["bf_inferior"]) < 1e-9
+            and abs(geo["tf_superior"]-geo["tf_inferior"]) < 1e-9
+        )
+        if geometria_simetrica and not sup and not inf:
             simetria = "Doble simetría"
-        elif sup and inf and abs(sup["b"]-inf["b"]) < 1e-9 and abs(sup["t"]-inf["t"]) < 1e-9:
+        elif geometria_simetrica and sup and inf and abs(sup["B"]-inf["B"]) < 1e-9 and abs(sup["t"]-inf["t"]) < 1e-9:
             simetria = "Doble simetría"
         else:
             simetria = "Monosimétrica"
@@ -526,19 +569,20 @@ def mostrar_ruta_y_diseno_capitulo_e(
                 for i,r in enumerate(resultados):
                     if r.clasificacion != "ESBELTO":
                         continue
+                    b_el, t_el, mult = datos_fisicos_e7(perfil, r.elemento, geo, cubreplacas_grafico, fabricacion)
                     with st.container(border=True):
                         st.markdown(f"**{r.elemento}**")
-                        q1,q2,q3=st.columns(3)
-                        b_el=entrada_magnitud("b", key=f"b_E7_{i}", magnitud="longitud", unidad=uL, valor_inicial_interno=max(1.0,r.lambda_real), min_interno=0.001)
-                        t_el=entrada_magnitud("t", key=f"t_E7_{i}", magnitud="longitud", unidad=uL, valor_inicial_interno=1.0, min_interno=0.001)
-                        mult=q3.number_input("Multiplicidad",min_value=1,value=1,step=1,key=f"m_E7_{i}")
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("b físico", f"{cvL(b_el):.3f} {uL}")
+                        c2.metric("t físico", f"{cvL(t_el):.3f} {uL}")
+                        c3.metric("Cantidad equivalente", str(mult))
                         if "Pared" in r.elemento and perfil in {"Tubo cuadrado","Tubo rectangular"}:
                             tipo_e7="pared de tubo cuadrado o rectangular"
                         elif r.condicion_borde == "Rigidizado":
                             tipo_e7="rigidizado excepto pared de tubo"
                         else:
                             tipo_e7="otro elemento"
-                        be,Fel,c1,eq=ancho_efectivo_e7(b=b_el,t=t_el,lambda_r=r.lambda_r,Fy=Fy,Fn=Fn_global,tipo_elemento=tipo_e7)
+                        be,Fel,c1e,eq=ancho_efectivo_e7(b=b_el,t=t_el,lambda_r=r.lambda_r,Fy=Fy,Fn=Fn_global,tipo_elemento=tipo_e7)
                         st.caption(f"Tipo E7.1: {tipo_e7}; be = {cvL(be):.3f} {uL}; Fel = {cvF(Fel):.3f} {uF}; {eq}.")
                         elementos.append({"nombre":r.elemento,"b":b_el,"t":t_el,"be":be,"multiplicidad":mult})
                 if elementos:
@@ -570,7 +614,7 @@ with st.sidebar.expander("Unidades", expanded=True):
 
 with st.sidebar.expander("Configuración general", expanded=True):
     perfil = st.selectbox("Tipo de perfil", [
-        "Perfil I", "Canal", "Tee", "Ángulo simple", "Ángulo doble con separadores",
+        "Perfil I", "Perfil I asimétrico", "Canal", "Tee", "Ángulo simple", "Ángulo doble con separadores",
         "Tubo cuadrado", "Tubo rectangular", "Tubo circular",
     ])
     eje = st.radio("Eje de análisis", ["x-x", "y-y"], help="Se conserva para flexión y flexocompresión.")
@@ -613,10 +657,18 @@ with st.sidebar.expander("Geometría", expanded=True):
             valor_inicial_interno=default, min_interno=minimo, max_interno=maximo,
         )
 
-    if perfil == "Perfil I":
+    if perfil in {"Perfil I", "Perfil I asimétrico"}:
         fabricacion = st.selectbox("Fabricación", ["Rolled", "Built-up"])
-        geo["bf"] = gl("Ancho total del patín bf", "geo_i_bf", 200.0)
-        geo["tf"] = gl("Espesor del patín tf", "geo_i_tf", 12.0)
+        if perfil == "Perfil I":
+            geo["bf"] = gl("Ancho total del patín bf", "geo_i_bf", 200.0)
+            geo["tf"] = gl("Espesor del patín tf", "geo_i_tf", 12.0)
+        else:
+            st.markdown("**Patín superior**")
+            geo["bf_superior"] = gl("Ancho bf superior", "geo_ia_bfs", 220.0)
+            geo["tf_superior"] = gl("Espesor tf superior", "geo_ia_tfs", 14.0)
+            st.markdown("**Patín inferior**")
+            geo["bf_inferior"] = gl("Ancho bf inferior", "geo_ia_bfi", 180.0)
+            geo["tf_inferior"] = gl("Espesor tf inferior", "geo_ia_tfi", 10.0)
         geo["h"] = gl("Altura libre del alma h", "geo_i_h", 450.0)
         geo["tw"] = gl("Espesor del alma tw", "geo_i_tw", 8.0)
 
@@ -703,6 +755,12 @@ else:
 try:
     if perfil == "Perfil I":
         resultados = evaluar_perfil_i(fabricacion=fabricacion, bf=geo["bf"], tf=geo["tf"], h=geo["h"], tw=geo["tw"], E=E, Fy=Fy, cubreplacas=cubreplacas_calculo)
+    elif perfil == "Perfil I asimétrico":
+        resultados = evaluar_perfil_i_asimetrico(
+            fabricacion=fabricacion, bf_superior=geo["bf_superior"], tf_superior=geo["tf_superior"],
+            bf_inferior=geo["bf_inferior"], tf_inferior=geo["tf_inferior"],
+            h=geo["h"], tw=geo["tw"], E=E, Fy=Fy, cubreplacas=cubreplacas_calculo,
+        )
     elif perfil == "Canal":
         resultados = evaluar_canal(b_ala=geo["b"], tf=geo["tf"], h=geo["h"], tw=geo["tw"], E=E, Fy=Fy)
     elif perfil == "Tee":

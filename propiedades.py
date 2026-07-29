@@ -247,6 +247,43 @@ def propiedades_perfil_i(*, bf: float, tf: float, h: float, tw: float,
     )
 
 
+
+def propiedades_perfil_i_asimetrico(
+    *, bf_superior: float, tf_superior: float,
+    bf_inferior: float, tf_inferior: float,
+    h: float, tw: float, cubreplacas: dict | None = None,
+) -> PropiedadesSeccion:
+    """Propiedades de una I monosimétrica con patines centrados y diferentes."""
+    for n, v in {
+        "bf_superior": bf_superior, "tf_superior": tf_superior,
+        "bf_inferior": bf_inferior, "tf_inferior": tf_inferior,
+        "h": h, "tw": tw,
+    }.items():
+        _positivo(n, v)
+    if tw > min(bf_superior, bf_inferior):
+        raise ValueError("tw no puede ser mayor que el ancho de los patines.")
+
+    d = tf_inferior + h + tf_superior
+    rects = [
+        Rectangulo(-bf_inferior/2, 0.0, bf_inferior, tf_inferior, "patín inferior"),
+        Rectangulo(-tw/2, tf_inferior, tw, h, "alma"),
+        Rectangulo(-bf_superior/2, tf_inferior+h, bf_superior, tf_superior, "patín superior"),
+    ]
+    cp = cubreplacas or {}
+    if cp.get("inferior"):
+        q=cp["inferior"]; B=float(q.get("B", q.get("b"))); t=float(q["t"])
+        rects.append(Rectangulo(-B/2, -t, B, t, "cubreplaca inferior"))
+    if cp.get("superior"):
+        q=cp["superior"]; B=float(q.get("B", q.get("b"))); t=float(q["t"])
+        rects.append(Rectangulo(-B/2, d, B, t, "cubreplaca superior"))
+
+    return propiedades_rectangulos(
+        "Perfil I asimétrico", rects, Cw=None,
+        observacion=("Perfil I monosimétrico respecto al eje vertical. Se ignoraron radios de filete; "
+                     "Cw y el centro de cortante deben ingresarse cuando E4 los requiera."),
+    )
+
+
 def propiedades_canal(*, b: float, tf: float, h: float, tw: float) -> PropiedadesSeccion:
     for n, v in {"b": b, "tf": tf, "h": h, "tw": tw}.items():
         _positivo(n, v)
@@ -365,6 +402,12 @@ def calcular_propiedades(perfil: str, geo: dict, *, fabricacion: str | None = No
                          cubreplacas: dict | None = None) -> PropiedadesSeccion:
     if perfil == "Perfil I":
         return propiedades_perfil_i(bf=geo["bf"], tf=geo["tf"], h=geo["h"], tw=geo["tw"], cubreplacas=cubreplacas)
+    if perfil == "Perfil I asimétrico":
+        return propiedades_perfil_i_asimetrico(
+            bf_superior=geo["bf_superior"], tf_superior=geo["tf_superior"],
+            bf_inferior=geo["bf_inferior"], tf_inferior=geo["tf_inferior"],
+            h=geo["h"], tw=geo["tw"], cubreplacas=cubreplacas,
+        )
     if perfil == "Canal":
         return propiedades_canal(b=geo["b"], tf=geo["tf"], h=geo["h"], tw=geo["tw"])
     if perfil == "Tee":

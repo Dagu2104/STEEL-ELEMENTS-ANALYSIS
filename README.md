@@ -45,9 +45,9 @@ Sube los archivos a la raíz del repositorio y selecciona `app.py` como archivo 
 
 La barra lateral permite seleccionar independientemente las unidades de longitud, esfuerzo, fuerza y momento. El programa conserva un sistema interno consistente (`mm`, `MPa`, `N`, `N·mm`) y convierte automáticamente los valores ya ingresados cuando se cambia una unidad.
 
-## Clasificación para flexión — Tabla B4.1b
 
-La pestaña **Flexión** clasifica automáticamente los elementos como compactos,
-no compactos o esbeltos según el tipo de perfil, fabricación, eje de análisis y
-lado indicado en compresión. Esta etapa no calcula resistencia a flexión ni
-aplica el Capítulo F.
+## Perfil I asimétrico
+
+Se admite una sección I monosimétrica con patines superior e inferior de anchos y espesores diferentes. En compresión axial se evalúan ambos patines por separado y el alma mediante B4.1a. En flexión mayor se evalúa el patín comprimido y el alma mediante el caso 16 cuando corresponde; en flexión menor se evalúan ambos patines por separado.
+
+La multiplicidad usada en E7 se determina automáticamente desde la geometría y no es editable.
