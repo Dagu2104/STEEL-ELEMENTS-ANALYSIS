@@ -96,3 +96,26 @@ a la unidad seleccionada por el usuario. Se adoptan `ϕb = 0.90` y `Ωb = 1.67`.
 ## Visualización de Fcr en flexión
 
 La tabla de resultados del Capítulo F incluye una columna `Fcr` en la unidad de esfuerzo seleccionada. El valor se muestra únicamente cuando la ecuación normativa define `Fcr` explícitamente. Cuando AISC calcula `Mn` directamente, la tabla indica `No definido`; cuando el estado límite no aplica, indica `No aplica`. Las ecuaciones que emplean el momento crítico `Mcr` lo reportan en la observación y no lo presentan como `Fcr`.
+
+## Cortante — Capítulo G
+
+La pestaña **Cortante**, ubicada después de Flexión, selecciona automáticamente la ruta normativa según el perfil y el eje de análisis:
+
+- G2 para perfiles I y canales con cortante paralelo al alma;
+- G3 para ángulos simples y el vástago de tees;
+- G4 para HSS rectangulares, cajones y secciones dobles simétricas soportadas;
+- G5 para HSS circulares;
+- G6 para cortante respecto al eje menor en perfiles I, canales, tees y configuraciones dobles soportadas;
+- G7 se muestra como advertencia cuando existen aberturas en el alma o en las paredes resistentes.
+
+Para G2, el programa siempre comienza con el alma sin rigidizadores transversales. Después puede:
+
+- determinar si los rigidizadores son necesarios al comparar la resistencia disponible con el cortante requerido;
+- incorporar uno o dos rigidizadores interiores uniformemente distribuidos en una longitud definida desde el apoyo;
+- formar un panel extremo y, con dos rigidizadores, un panel interior;
+- verificar el panel interior con G2.2 cuando se desea aprovechar la acción de campo de tracción;
+- verificar esbeltez e inercia de los rigidizadores mediante G2-16 a G2-19.
+
+G2.3 no se calcula. Los paneles extremos se revisan conservadoramente mediante G2.1. Para aprovechar la resistencia postpandeo del panel extremo se informa la necesidad de un análisis especializado, preferentemente mediante elementos finitos no lineales.
+
+Los rigidizadores se evalúan por panel. La distancia `a` es la separación libre entre los elementos que delimitan el panel actual, no la longitud total de la zona rigidizada. El cortante requerido puede ingresarse individualmente para cada panel.

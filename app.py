@@ -48,6 +48,20 @@ from capitulo_f import (
     deduccion_ancho_seccion_neta,
 )
 
+from capitulo_g import (
+    ResultadoCortante,
+    calcular_g2_sin_rigidizadores,
+    calcular_g2_panel,
+    calcular_g3,
+    calcular_g4,
+    calcular_g5,
+    calcular_g6,
+    capacidad_disponible,
+    rigidizadores_requeridos_g24,
+    ruta_capitulo_g,
+    verificar_rigidizador_g24,
+)
+
 from funciones import (
     evaluar_angulo,
     evaluar_canal,
@@ -1030,6 +1044,444 @@ def mostrar_ruta_y_diseno_capitulo_f(
             st.error(str(exc))
 
 
+def _datos_patines_g2(perfil: str, geo: dict, cubreplacas: dict, lado_compresion: str):
+    """Áreas y anchos de patines para las condiciones geométricas de G2.2."""
+    if perfil == "Perfil I":
+        sup = {"b": geo["bf"], "A": geo["bf"] * geo["tf"]}
+        inf = {"b": geo["bf"], "A": geo["bf"] * geo["tf"]}
+    elif perfil == "Perfil I asimétrico":
+        sup = {"b": geo["bf_superior"], "A": geo["bf_superior"] * geo["tf_superior"]}
+        inf = {"b": geo["bf_inferior"], "A": geo["bf_inferior"] * geo["tf_inferior"]}
+    elif perfil == "Canal":
+        sup = {"b": geo["b"], "A": geo["b"] * geo["tf"]}
+        inf = {"b": geo["b"], "A": geo["b"] * geo["tf"]}
+    else:
+        raise ValueError("G2.2 solo se implementa para perfiles I y canales.")
+
+    for lado, datos in (("superior", sup), ("inferior", inf)):
+        cp = cubreplacas.get(lado)
+        if cp:
+            Bcp = float(cp.get("B", cp.get("b", 0.0)))
+            tcp = float(cp["t"])
+            datos["A"] += Bcp * tcp
+            datos["b"] = max(datos["b"], Bcp)
+
+    if lado_compresion == "Superior":
+        comp, trac = sup, inf
+    else:
+        comp, trac = inf, sup
+    return comp["A"], trac["A"], comp["b"], trac["b"]
+
+
+def _mostrar_resultado_cortante(resultado, unidad_fuerza: str, unidad_esfuerzo: str) -> None:
+    cvP = lambda v: valor_mostrado(v, "fuerza", unidad_fuerza)
+    cvF = lambda v: valor_mostrado(v, "esfuerzo", unidad_esfuerzo)
+    filas = []
+    for e in resultado.estados:
+        filas.append({
+            "Estado / componente": e.estado,
+            "Ecuación": e.ecuacion,
+            "λv": "—" if e.lambda_v is None else round(e.lambda_v, 5),
+            "kv": "—" if e.kv is None else round(e.kv, 5),
+            "Cv": "—" if e.Cv is None else round(e.Cv, 5),
+            f"Fcr [{unidad_esfuerzo}]": "—" if e.Fcr is None else round(cvF(e.Fcr), 5),
+            f"Vn [{unidad_fuerza}]": round(cvP(e.Vn), 5),
+            "Observación": e.observacion,
+        })
+    st.dataframe(filas, use_container_width=True, hide_index=True)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Resistencia nominal Vn", f"{cvP(resultado.Vn):,.4f} {unidad_fuerza}")
+    c2.metric("LRFD: ϕvVn", f"{cvP(resultado.phi_Vn):,.4f} {unidad_fuerza}")
+    c3.metric("ASD: Vn/Ωv", f"{cvP(resultado.Vn_sobre_omega):,.4f} {unidad_fuerza}")
+    for obs in resultado.observaciones:
+        st.caption(obs)
+
+
+def _comparar_cortante(resultado, metodo: str, Vr: float, unidad_fuerza: str, etiqueta: str = "") -> None:
+    disponible = capacidad_disponible(resultado.adoptado, metodo)
+    cvP = lambda v: valor_mostrado(v, "fuerza", unidad_fuerza)
+    razon = Vr / disponible if disponible > 0 else float("inf")
+    mensaje = (
+        f"{etiqueta + ': ' if etiqueta else ''}{metodo} — demanda/capacidad = {razon:.3f}. "
+        f"Vr={cvP(Vr):,.3f} {unidad_fuerza}; disponible={cvP(disponible):,.3f} {unidad_fuerza}."
+    )
+    if razon <= 1.0:
+        st.success(mensaje + " Cumple.")
+    else:
+        st.error(mensaje + " No cumple.")
+
+
+def mostrar_ruta_y_diseno_capitulo_g(
+    perfil: str, E: float, Fy: float, geo: dict, fabricacion: str | None,
+    cubreplacas: dict, prop, eje: str, lado_compresion: str,
+    unidad_esfuerzo: str, unidad_longitud: str, unidad_fuerza: str,
+) -> None:
+    """Ruta automática y diseño a cortante conforme al alcance del Capítulo G."""
+    ruta = ruta_capitulo_g(perfil, eje)
+    uL, uF, uP = unidad_longitud, unidad_esfuerzo, unidad_fuerza
+    cvP = lambda v: valor_mostrado(v, "fuerza", uP)
+    cvL = lambda v, p=1: valor_mostrado(v, "longitud", uL, p)
+
+    with st.expander("Ruta automática del Capítulo G", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Sección aplicable", ruta.seccion)
+        c2.metric("Dirección asociada", eje)
+        c3.metric("Elemento resistente", ruta.elemento_resistente)
+        st.caption(ruta.descripcion)
+        st.code(f"{perfil} → eje {eje} → {ruta.elemento_resistente} → {ruta.seccion}")
+        st.write("**Ecuaciones consideradas:** " + " · ".join(ruta.ecuaciones_principales))
+        for aviso in ruta.advertencias:
+            st.warning(aviso)
+
+    st.info(
+        f"Los cálculos internos usan N y MPa. Los resultados se muestran en **{uP}**. "
+        "Salvo la excepción G2.1(a), se usa ϕv=0.90 y Ωv=1.67."
+    )
+
+    metodo = st.radio(
+        "Método para comparar la demanda",
+        ["LRFD", "ASD"], horizontal=True, key=f"G_metodo_{perfil}_{eje}",
+        help=(
+            "LRFD compara el cortante factorizado Vu con ϕvVn. ASD compara el cortante "
+            "de servicio Va con Vn/Ωv."
+        ),
+    )
+    comparar = st.checkbox(
+        "Comparar con un cortante requerido",
+        value=False, key=f"G_comparar_{perfil}_{eje}",
+        help="Actívelo para obtener la relación demanda/capacidad y determinar si se requieren rigidizadores por resistencia.",
+    )
+    Vr_general = None
+    if comparar:
+        Vr_general = entrada_magnitud(
+            "Cortante requerido Vu" if metodo == "LRFD" else "Cortante requerido Va",
+            key=f"G_Vr_{perfil}_{eje}_{metodo}", magnitud="fuerza", unidad=uP,
+            valor_inicial_interno=100_000.0, min_interno=0.0,
+            help=(
+                "Cortante que actúa en la sección o panel evaluado. Use combinaciones "
+                "factorizadas para LRFD y combinaciones de servicio para ASD."
+            ),
+        )
+
+    tiene_aberturas = st.checkbox(
+        "Existen aberturas en el alma o en las paredes resistentes",
+        value=False, key=f"G7_aberturas_{perfil}_{eje}",
+        help=(
+            "G7 exige considerar expresamente el efecto de cada abertura. La resistencia "
+            "de la sección sin abertura no puede aplicarse directamente en esa zona."
+        ),
+    )
+    if tiene_aberturas:
+        st.error(
+            "G7 — La resistencia calculada abajo corresponde a la sección sin abertura. "
+            "La zona de la abertura requiere un análisis específico y refuerzo cuando la "
+            "demanda exceda la resistencia disponible local."
+        )
+
+    try:
+        if ruta.seccion == "G2":
+            h, tw = geo["h"], geo["tw"]
+            if perfil == "Perfil I":
+                d = h + 2.0 * geo["tf"]
+            elif perfil == "Perfil I asimétrico":
+                d = h + geo["tf_superior"] + geo["tf_inferior"]
+            else:
+                d = h + 2.0 * geo["tf"]
+
+            st.subheader("G2.1 — Análisis base sin rigidizadores transversales")
+            base = calcular_g2_sin_rigidizadores(
+                perfil=perfil, fabricacion=fabricacion, E=E, Fy=Fy,
+                h=h, tw=tw, d=d,
+            )
+            _mostrar_resultado_cortante(base, uP, uF)
+            if Vr_general is not None:
+                _comparar_cortante(base, metodo, Vr_general, uP, "Alma sin rigidizadores")
+
+            disponible_base = capacidad_disponible(base.adoptado, metodo)
+            necesita, observaciones_necesidad = rigidizadores_requeridos_g24(
+                E=E, Fy=Fy, h=h, tw=tw,
+                resistencia_disponible_sin_rigidizadores=disponible_base,
+                cortante_requerido=Vr_general,
+            )
+            for obs in observaciones_necesidad:
+                if necesita is True:
+                    st.warning(obs)
+                elif necesita is False:
+                    st.success(obs)
+                else:
+                    st.info(obs)
+
+            agregar = st.checkbox(
+                "Incorporar o verificar rigidizadores transversales interiores",
+                value=False, key=f"G2_incorporar_rigidizadores_{perfil}",
+                help=(
+                    "Los rigidizadores son placas perpendiculares al eje longitudinal de la viga. "
+                    "Dividen el alma en paneles. La aplicación primero comprobó el alma sin "
+                    "rigidizadores; active esta opción para formar y verificar paneles rigidizados."
+                ),
+            )
+            if agregar:
+                st.markdown("### Configuración de la zona rigidizada")
+                numero = st.radio(
+                    "Número de rigidizadores interiores",
+                    [1, 2], horizontal=True, key=f"G2_num_rigidizadores_{perfil}",
+                    help=(
+                        "Un rigidizador interior forma un panel extremo entre el apoyo y ese rigidizador. "
+                        "Dos rigidizadores forman un panel extremo y un panel interior. La región situada "
+                        "después del último rigidizador no se incluye automáticamente en este cálculo."
+                    ),
+                )
+                Lz = entrada_magnitud(
+                    "Longitud de la zona rigidizada medida desde el apoyo",
+                    key=f"G2_Lz_{perfil}_{numero}", magnitud="longitud", unidad=uL,
+                    valor_inicial_interno=600.0, min_interno=0.001,
+                    help=(
+                        "Distancia desde el apoyo o poste extremo hasta el último rigidizador interior "
+                        "incluido. Los rigidizadores seleccionados se distribuyen uniformemente dentro "
+                        "de esta longitud. No corresponde a la longitud total de la viga."
+                    ),
+                )
+                a = Lz / numero
+                st.info(
+                    f"Separación libre adoptada por panel: a={cvL(a):,.3f} {uL}; "
+                    f"a/h={a/h:.3f}."
+                )
+                if numero == 1:
+                    st.code("Apoyo/poste extremo ┃── panel extremo ──┃ rigidizador interior")
+                else:
+                    st.code(
+                        "Apoyo/poste extremo ┃── panel extremo ──┃ rigidizador 1 "
+                        "┃── panel interior ──┃ rigidizador 2"
+                    )
+
+                Afc, Aft, bfc, bft = _datos_patines_g2(
+                    perfil, geo, cubreplacas, lado_compresion,
+                )
+                paneles = []
+                demandas_panel = []
+                for i in range(numero):
+                    tipo = "Extremo" if i == 0 else "Interior"
+                    st.markdown(f"#### Panel {i+1} — {tipo}")
+                    usar_tfa = False
+                    if tipo == "Interior":
+                        usar_tfa = st.checkbox(
+                            "Aprovechar acción de campo de tracción G2.2",
+                            value=True, key=f"G2_TFA_{perfil}_{i}",
+                            disabled=(a / h > 3.0),
+                            help=(
+                                "G2.2 solo corresponde a paneles interiores delimitados por rigidizadores "
+                                "y requiere a/h≤3. Si se desactiva, el panel se verifica únicamente mediante G2.1."
+                            ),
+                        )
+                        if a / h > 3.0:
+                            st.warning("a/h>3.0; la acción de campo de tracción de G2.2 no es aplicable.")
+                    else:
+                        st.warning(
+                            "G2.3 no se calcula. El panel extremo se verifica conservadoramente mediante G2.1. "
+                            "Para aprovechar su resistencia postpandeo se requiere un análisis especializado, "
+                            "preferentemente con elementos finitos no lineales que representen alma, patines, "
+                            "poste extremo, rigidizadores, imperfecciones y no linealidad geométrica/material."
+                        )
+
+                    panel = calcular_g2_panel(
+                        perfil=perfil, fabricacion=fabricacion, tipo_panel=tipo,
+                        E=E, Fy=Fy, h=h, tw=tw, d=d, a=a,
+                        Afc=Afc, Aft=Aft, bfc=bfc, bft=bft,
+                        usar_campo_traccion=usar_tfa,
+                    )
+                    paneles.append(panel)
+                    estados_panel = [panel.g21]
+                    if panel.g22 is not None:
+                        estados_panel.append(panel.g22)
+                    resultado_panel = ResultadoCortante(
+                        f"G2 — panel {i+1}", tuple(estados_panel), panel.adoptado,
+                        panel.observaciones,
+                    )
+                    _mostrar_resultado_cortante(resultado_panel, uP, uF)
+
+                    Vr_p = entrada_magnitud(
+                        "Cortante requerido del panel Vu" if metodo == "LRFD" else "Cortante requerido del panel Va",
+                        key=f"G2_Vr_panel_{perfil}_{i}_{metodo}", magnitud="fuerza", unidad=uP,
+                        valor_inicial_interno=Vr_general if Vr_general is not None else 100_000.0,
+                        min_interno=0.0,
+                        help=(
+                            "Demanda de cortante correspondiente específicamente a este panel. El cortante "
+                            "puede disminuir al alejarse del apoyo, por lo que no se obliga a usar el mismo "
+                            "valor en todos los paneles."
+                        ),
+                    )
+                    demandas_panel.append(Vr_p)
+                    _comparar_cortante(resultado_panel, metodo, Vr_p, uP, f"Panel {i+1}")
+
+                st.markdown("### G2.4 — Verificación de los rigidizadores suministrados")
+                mismo_acero = st.checkbox(
+                    "Usar el mismo Fy del perfil para los rigidizadores",
+                    value=True, key=f"G24_mismo_acero_{perfil}",
+                    help=(
+                        "Fyst es el esfuerzo mínimo de fluencia del acero del rigidizador transversal. "
+                        "Puede diferir del acero del alma."
+                    ),
+                )
+                Fyst = Fy if mismo_acero else entrada_magnitud(
+                    "Esfuerzo de fluencia del rigidizador Fyst",
+                    key=f"G24_Fyst_{perfil}", magnitud="esfuerzo", unidad=uF,
+                    valor_inicial_interno=250.0, min_interno=0.001,
+                    help="Esfuerzo mínimo de fluencia especificado para la placa del rigidizador transversal.",
+                )
+                numero_placas = st.radio(
+                    "Placas por rigidizador",
+                    [1, 2], horizontal=True, key=f"G24_num_placas_{perfil}",
+                    help=(
+                        "Una placa se coloca a un solo lado del alma y su inercia se calcula respecto a la "
+                        "cara en contacto con el alma. Dos placas forman un par, una a cada lado, y la inercia "
+                        "se calcula respecto al plano medio del alma."
+                    ),
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    b_st = entrada_magnitud(
+                        "Ancho saliente del rigidizador bst", key=f"G24_bst_{perfil}",
+                        magnitud="longitud", unidad=uL, valor_inicial_interno=80.0, min_interno=0.001,
+                        help="Distancia desde la cara del alma hasta el borde libre de la placa rigidizadora.",
+                    )
+                with c2:
+                    t_st = entrada_magnitud(
+                        "Espesor del rigidizador tst", key=f"G24_tst_{perfil}",
+                        magnitud="longitud", unidad=uL, valor_inicial_interno=8.0, min_interno=0.001,
+                        help="Espesor de la placa transversal utilizada como rigidizador.",
+                    )
+
+                filas_st = []
+                for i, panel in enumerate(paneles):
+                    Vr_p = demandas_panel[i]
+                    Vc1 = capacidad_disponible(panel.adoptado, metodo)
+                    Vc2_nom = panel.Vn_Cv2
+                    Vc2 = 0.90 * Vc2_nom if metodo == "LRFD" else Vc2_nom / 1.67
+                    ver = verificar_rigidizador_g24(
+                        E=E, Fyw=Fy, Fyst=Fyst, h=h, tw=tw, a=a,
+                        b_st=b_st, t_st=t_st, numero_placas=numero_placas,
+                        Vr=Vr_p, Vc1=Vc1, Vc2=Vc2,
+                    )
+                    filas_st.append({
+                        "Panel adyacente": f"Panel {i+1} — {panel.tipo_panel}",
+                        "bst/tst": round(ver.lambda_st, 4),
+                        "Límite G2-16": round(ver.lambda_limite, 4),
+                        "Esbeltez": "Cumple" if ver.cumple_esbeltez else "No cumple",
+                        f"Ist prov. [{unidad_propiedad(uL,4)}]": round(cvL(ver.Ist_proporcionado, 4), 4),
+                        f"Ist req. [{unidad_propiedad(uL,4)}]": round(cvL(ver.Ist_requerido, 4), 4),
+                        "Inercia": "Cumple" if ver.cumple_inercia else "No cumple",
+                        "ρw": round(ver.rho_w, 4),
+                    })
+                    if ver.demanda_supera_panel:
+                        st.error(
+                            f"Panel {i+1}: la demanda supera la resistencia disponible del panel. "
+                            "Aumentar solo el rigidizador no resuelve la insuficiencia."
+                        )
+                    for obs in ver.observaciones:
+                        st.caption(f"Panel {i+1}: {obs}")
+                st.dataframe(filas_st, use_container_width=True, hide_index=True)
+                st.caption(
+                    "La verificación usa la máxima exigencia de los paneles modelados. Si existe otro panel "
+                    "al lado opuesto del último rigidizador, también debe verificarse y puede gobernar."
+                )
+
+        elif ruta.seccion == "G3":
+            if perfil == "Tee":
+                b, t, mult, desc = geo["d"], geo["tw"], 1, "vástago de la Tee"
+            else:
+                pata = st.radio(
+                    "Pata que resiste el cortante",
+                    ["Pata 1", "Pata 2"], horizontal=True, key=f"G3_pata_{eje}",
+                    help="Seleccione la pata aproximadamente paralela a la dirección de la fuerza cortante.",
+                )
+                b = geo["b1"] if pata == "Pata 1" else geo["b2"]
+                t, mult, desc = geo["t"], 1, pata.lower()
+            resultado = calcular_g3(E=E, Fy=Fy, b=b, t=t, multiplicidad=mult, descripcion=desc)
+            _mostrar_resultado_cortante(resultado, uP, uF)
+            if Vr_general is not None:
+                _comparar_cortante(resultado, metodo, Vr_general, uP)
+
+        elif ruta.seccion == "G4":
+            if perfil in {"Tubo cuadrado", "Tubo rectangular"}:
+                dimension = geo["H"] if eje == "x-x" else geo["B"]
+                descuento = 3.0 * geo["t"] if fabricacion == "Rolled" else 2.0 * geo["t"]
+                h_res = dimension - descuento
+                desc = "paredes verticales" if eje == "x-x" else "paredes horizontales"
+                resultado = calcular_g4(
+                    E=E, Fy=Fy, h=h_res, t=geo["t"], numero_almas=2,
+                    descripcion=desc,
+                )
+            else:
+                resultado = calcular_g4(
+                    E=E, Fy=Fy, h=geo["b1"], t=geo["t"], numero_almas=2,
+                    descripcion="patas verticales de los dos ángulos",
+                )
+            _mostrar_resultado_cortante(resultado, uP, uF)
+            if Vr_general is not None:
+                _comparar_cortante(resultado, metodo, Vr_general, uP)
+
+        elif ruta.seccion == "G5":
+            Lv = entrada_magnitud(
+                "Distancia desde el cortante máximo hasta el punto de cortante cero Lv",
+                key="G5_Lv", magnitud="longitud", unidad=uL,
+                valor_inicial_interno=3000.0, min_interno=0.001,
+                help=(
+                    "Longitud medida a lo largo del miembro entre la sección de cortante máximo y "
+                    "la sección donde el diagrama de cortante llega a cero."
+                ),
+            )
+            resultado = calcular_g5(E=E, Fy=Fy, Ag=prop.Ag, D=geo["D"], t=geo["t"], Lv=Lv)
+            _mostrar_resultado_cortante(resultado, uP, uF)
+            if Vr_general is not None:
+                _comparar_cortante(resultado, metodo, Vr_general, uP)
+
+        elif ruta.seccion == "G6":
+            elementos = []
+            if perfil == "Perfil I":
+                elementos = [
+                    ("patín superior", geo["bf"], geo["tf"], 2.0),
+                    ("patín inferior", geo["bf"], geo["tf"], 2.0),
+                ]
+            elif perfil == "Perfil I asimétrico":
+                elementos = [
+                    ("patín superior", geo["bf_superior"], geo["tf_superior"], 2.0),
+                    ("patín inferior", geo["bf_inferior"], geo["tf_inferior"], 2.0),
+                ]
+            elif perfil == "Canal":
+                elementos = [
+                    ("patín superior", geo["b"], geo["tf"], 1.0),
+                    ("patín inferior", geo["b"], geo["tf"], 1.0),
+                ]
+            elif perfil == "Tee":
+                elementos = [("patín de la Tee", 2.0 * geo["b"], geo["tf"], 2.0)]
+            else:
+                elementos = [
+                    ("pata horizontal del ángulo 1", geo["b2"], geo["t"], 1.0),
+                    ("pata horizontal del ángulo 2", geo["b2"], geo["t"], 1.0),
+                ]
+
+            if cubreplacas and perfil in {"Perfil I", "Perfil I asimétrico"}:
+                participa_cp = st.checkbox(
+                    "Las cubreplacas participan en la resistencia a cortante del eje menor",
+                    value=False, key=f"G6_cp_participa_{perfil}",
+                    help=(
+                        "Actívelo solo cuando la conexión entre cubreplaca y patín puede desarrollar y "
+                        "transferir el cortante longitudinal correspondiente."
+                    ),
+                )
+                if participa_cp:
+                    for lado, q in cubreplacas.items():
+                        Bcp = float(q.get("B", q.get("b", 0.0)))
+                        elementos.append((f"cubreplaca {lado}", Bcp, float(q["t"]), 2.0))
+
+            resultado = calcular_g6(E=E, Fy=Fy, elementos=elementos)
+            _mostrar_resultado_cortante(resultado, uP, uF)
+            if Vr_general is not None:
+                _comparar_cortante(resultado, metodo, Vr_general, uP)
+
+    except (ValueError, ZeroDivisionError) as exc:
+        st.error(str(exc))
+
 def datos_fisicos_e7(perfil: str, elemento: str, geo: dict, cubreplacas: dict, fabricacion: str | None) -> tuple[float, float, int]:
     """Devuelve b, t y multiplicidad física automática para E7."""
     e = elemento.lower()
@@ -1625,11 +2077,12 @@ st.caption(
     f"fuerza {unidad_fuerza} y momento {unidad_momento}."
 )
 
-tab_axial, tab_flexion, tab_interaccion = st.tabs(["Carga axial", "Flexión", "Flexocompresión"])
+tab_axial, tab_flexion, tab_cortante, tab_interaccion = st.tabs(["Carga axial", "Flexión", "Cortante", "Flexocompresión"])
 
 for tab, titulo in [
     (tab_axial, "Elementos sujetos a carga axial de compresión"),
     (tab_flexion, "Elementos sujetos a flexión"),
+    (tab_cortante, "Elementos sujetos a cortante"),
     (tab_interaccion, "Elementos sujetos a flexocompresión"),
 ]:
     with tab:
@@ -1660,6 +2113,19 @@ for tab, titulo in [
                     perfil, resultados_flexion, E, Fy, geo, fabricacion,
                     cubreplacas_grafico, propiedades, eje, lado_compresion,
                     unidad_esfuerzo, unidad_longitud, unidad_fuerza, unidad_momento,
+                )
+        elif tab is tab_cortante:
+            st.info(
+                f"Cortante asociado al eje de análisis **{eje}**. La aplicación selecciona "
+                "automáticamente la ruta G2–G6 según el perfil y la dirección."
+            )
+            if propiedades is None:
+                st.error(error_propiedades or "No se pudieron calcular las propiedades geométricas.")
+            else:
+                mostrar_ruta_y_diseno_capitulo_g(
+                    perfil, E, Fy, geo, fabricacion, cubreplacas_grafico,
+                    propiedades, eje, lado_compresion,
+                    unidad_esfuerzo, unidad_longitud, unidad_fuerza,
                 )
         else:
             st.info("Las propiedades geométricas ya se calculan automáticamente. Las ecuaciones de interacción se incorporarán en un módulo posterior.")
