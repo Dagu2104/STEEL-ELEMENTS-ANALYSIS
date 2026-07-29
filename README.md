@@ -119,3 +119,19 @@ Para G2, el programa siempre comienza con el alma sin rigidizadores transversale
 G2.3 no se calcula. Los paneles extremos se revisan conservadoramente mediante G2.1. Para aprovechar la resistencia postpandeo del panel extremo se informa la necesidad de un análisis especializado, preferentemente mediante elementos finitos no lineales.
 
 Los rigidizadores se evalúan por panel. La distancia `a` es la separación libre entre los elementos que delimitan el panel actual, no la longitud total de la zona rigidizada. El cortante requerido puede ingresarse individualmente para cada panel.
+
+## Comparación demanda/capacidad
+
+Las pestañas **Carga axial**, **Flexión** y **Cortante** permiten seleccionar LRFD o ASD e ingresar la solicitación correspondiente. La aplicación muestra mediante métricas:
+
+- demanda;
+- capacidad disponible;
+- relación demanda/capacidad `D/C`;
+- estado `CUMPLE` o `NO CUMPLE`.
+
+La comparación es únicamente una capa de verificación y no modifica las ecuaciones ni los resultados nominales ya implementados en los capítulos E, F y G.
+
+En G2, la recomendación de rigidizadores distingue la causa de la insuficiencia:
+
+- si `Cv < 1.0`, la resistencia está reducida por pandeo del alma y los rigidizadores pueden aumentar `kv` y `Cv`;
+- si `Cv = 1.0`, gobierna la fluencia `0.6FyAw` y los rigidizadores no aumentan ese límite; debe modificarse el alma, reforzarse la sección o elegirse un perfil mayor.

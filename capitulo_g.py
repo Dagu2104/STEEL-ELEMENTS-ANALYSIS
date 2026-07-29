@@ -379,35 +379,67 @@ def rigidizadores_requeridos_g24(
     *, E: float, Fy: float, h: float, tw: float,
     resistencia_disponible_sin_rigidizadores: float,
     cortante_requerido: float | None,
+    Cv_sin_rigidizadores: float | None = None,
 ) -> tuple[bool | None, tuple[str, ...]]:
-    """Criterio de necesidad de rigidizadores de G2.4(a)."""
+    """Diagnóstico de necesidad y utilidad de rigidizadores según G2.4(a).
+
+    Devuelve:
+    - False: no son exigidos por resistencia para la demanda ingresada.
+    - True: la demanda excede la capacidad y Cv<1, por lo que pueden aumentar
+      la resistencia al pandeo del alma.
+    - None: falta demanda o la sección falla con Cv=1; en este último caso
+      los rigidizadores no resuelven la insuficiencia de fluencia.
+    """
     for n, v in {"E": E, "Fy": Fy, "h": h, "tw": tw}.items():
         _positivo(n, v)
     _positivo("resistencia disponible", resistencia_disponible_sin_rigidizadores)
+    if Cv_sin_rigidizadores is not None:
+        _positivo("Cv sin rigidizadores", Cv_sin_rigidizadores)
+
     lam = h / tw
     limite = 2.54 * sqrt(E / Fy)
     obs: list[str] = []
-    if lam <= limite:
-        obs.append(
-            f"h/tw={lam:.3f} ≤ 2.54√(E/Fy)={limite:.3f}; G2.4(a) no exige rigidizadores transversales."
-        )
-        return False, tuple(obs)
+
     if cortante_requerido is None:
-        obs.append(
-            "h/tw supera el límite geométrico. Sin un cortante requerido no puede concluirse "
-            "si la resistencia disponible sin rigidizadores es suficiente."
-        )
+        if lam <= limite:
+            obs.append(
+                f"h/tw={lam:.3f} ≤ 2.54√(E/Fy)={limite:.3f}; G2.4(a) no exige "
+                "rigidizadores por el criterio geométrico."
+            )
+        else:
+            obs.append(
+                "h/tw supera el límite geométrico. Sin un cortante requerido no puede "
+                "concluirse si la resistencia disponible sin rigidizadores es suficiente."
+            )
         return None, tuple(obs)
+
     _no_negativo("cortante requerido", cortante_requerido)
     if resistencia_disponible_sin_rigidizadores >= cortante_requerido:
-        obs.append(
-            "Aunque h/tw supera el límite geométrico, la resistencia disponible sin rigidizadores "
-            "es mayor o igual que el cortante requerido; G2.4(a) no los exige por resistencia."
-        )
+        if lam <= limite:
+            obs.append(
+                f"h/tw={lam:.3f} ≤ 2.54√(E/Fy)={limite:.3f} y la resistencia "
+                "disponible supera la demanda; no se requieren rigidizadores por cortante."
+            )
+        else:
+            obs.append(
+                "Aunque h/tw supera el límite geométrico, la resistencia disponible sin "
+                "rigidizadores es mayor o igual que el cortante requerido; G2.4(a) no los "
+                "exige por resistencia."
+            )
         return False, tuple(obs)
+
+    if Cv_sin_rigidizadores is not None and Cv_sin_rigidizadores >= 1.0 - 1e-9:
+        obs.append(
+            "La demanda excede la resistencia, pero Cv=1.00: gobierna la fluencia del alma. "
+            "Los rigidizadores transversales no aumentan el límite 0.6FyAw; debe modificarse "
+            "el área resistente o la sección."
+        )
+        return None, tuple(obs)
+
     obs.append(
-        "La esbeltez supera el límite y la resistencia disponible sin rigidizadores es menor que "
-        "el cortante requerido; se requieren rigidizadores o una modificación del alma/sección."
+        "La resistencia disponible sin rigidizadores es menor que el cortante requerido y "
+        "Cv<1.00; la resistencia está reducida por pandeo del alma. Los rigidizadores pueden "
+        "aumentar kv y Cv, y los paneles interiores pueden aprovechar G2.2 cuando corresponda."
     )
     return True, tuple(obs)
 

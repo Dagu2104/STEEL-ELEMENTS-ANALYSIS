@@ -1040,6 +1040,37 @@ def mostrar_ruta_y_diseno_capitulo_f(
             for obs in resultado_f.observaciones:
                 st.caption(obs)
 
+            with st.expander("Verificación de la solicitación a flexión", expanded=False):
+                metodo_f = st.radio(
+                    "Método de diseño para la comparación", ["LRFD", "ASD"],
+                    horizontal=True, key=f"F_metodo_demanda_{perfil}_{eje}_{ruta.seccion}",
+                    help=(
+                        "LRFD compara Mu con ϕbMn. ASD compara Ma con Mn/Ωb. "
+                        "Este bloque no modifica el cálculo de Mn."
+                    ),
+                )
+                comparar_f = st.checkbox(
+                    "Comparar con un momento requerido", value=False,
+                    key=f"F_comparar_demanda_{perfil}_{eje}_{ruta.seccion}",
+                )
+                if comparar_f:
+                    etiqueta_m = "Momento requerido Mu" if metodo_f == "LRFD" else "Momento requerido Ma"
+                    Mreq = entrada_magnitud(
+                        etiqueta_m, key=f"F_Mreq_{perfil}_{eje}_{ruta.seccion}_{metodo_f}",
+                        magnitud="momento", unidad=uM, valor_inicial_interno=10_000_000.0,
+                        min_interno=0.0,
+                        help=(
+                            "Ingrese el momento solicitante del mismo eje y combinación de carga. "
+                            "Use combinaciones factorizadas para LRFD y de servicio para ASD."
+                        ),
+                    )
+                    capacidad_f = resultado_f.phi_Mn if metodo_f == "LRFD" else resultado_f.Mn_sobre_omega
+                    _mostrar_verificacion_solicitacion(
+                        demanda=cvM(Mreq), capacidad=cvM(capacidad_f), unidad=uM, metodo=metodo_f,
+                        etiqueta_demanda="Demanda Mu" if metodo_f == "LRFD" else "Demanda Ma",
+                        etiqueta_capacidad="Capacidad ϕbMn" if metodo_f == "LRFD" else "Capacidad Mn/Ωb",
+                    )
+
         except (ValueError, ZeroDivisionError) as exc:
             st.error(str(exc))
 
@@ -1073,6 +1104,35 @@ def _datos_patines_g2(perfil: str, geo: dict, cubreplacas: dict, lado_compresion
     return comp["A"], trac["A"], comp["b"], trac["b"]
 
 
+def _mostrar_verificacion_solicitacion(
+    *, demanda: float, capacidad: float, unidad: str, metodo: str,
+    etiqueta_demanda: str, etiqueta_capacidad: str, titulo: str = "Verificación de la solicitación",
+) -> float:
+    """Muestra demanda, capacidad, relación D/C y estado sin alterar cálculos normativos."""
+    razon = demanda / capacidad if capacidad > 0 else float("inf")
+    estado = "CUMPLE" if razon <= 1.0 else "NO CUMPLE"
+
+    st.markdown(f"### {titulo}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(etiqueta_demanda, f"{demanda:,.4f} {unidad}")
+    c2.metric(etiqueta_capacidad, f"{capacidad:,.4f} {unidad}")
+    c3.metric("Relación demanda/capacidad", f"{razon:,.4f}")
+    c4.metric("Estado", estado)
+
+    mensaje = (
+        f"{metodo}: demanda/capacidad = {razon:.4f}. "
+        f"{etiqueta_demanda} = {demanda:,.4f} {unidad}; "
+        f"{etiqueta_capacidad} = {capacidad:,.4f} {unidad}."
+    )
+    if razon > 1.0:
+        st.error(mensaje + " No cumple.")
+    elif razon > 0.95:
+        st.warning(mensaje + " Cumple, pero está próximo al límite.")
+    else:
+        st.success(mensaje + " Cumple.")
+    return razon
+
+
 def _mostrar_resultado_cortante(resultado, unidad_fuerza: str, unidad_esfuerzo: str) -> None:
     cvP = lambda v: valor_mostrado(v, "fuerza", unidad_fuerza)
     cvF = lambda v: valor_mostrado(v, "esfuerzo", unidad_esfuerzo)
@@ -1097,18 +1157,20 @@ def _mostrar_resultado_cortante(resultado, unidad_fuerza: str, unidad_esfuerzo: 
         st.caption(obs)
 
 
-def _comparar_cortante(resultado, metodo: str, Vr: float, unidad_fuerza: str, etiqueta: str = "") -> None:
+def _comparar_cortante(resultado, metodo: str, Vr: float, unidad_fuerza: str, etiqueta: str = "") -> float:
     disponible = capacidad_disponible(resultado.adoptado, metodo)
-    cvP = lambda v: valor_mostrado(v, "fuerza", unidad_fuerza)
-    razon = Vr / disponible if disponible > 0 else float("inf")
-    mensaje = (
-        f"{etiqueta + ': ' if etiqueta else ''}{metodo} — demanda/capacidad = {razon:.3f}. "
-        f"Vr={cvP(Vr):,.3f} {unidad_fuerza}; disponible={cvP(disponible):,.3f} {unidad_fuerza}."
+    demanda_mostrada = valor_mostrado(Vr, "fuerza", unidad_fuerza)
+    capacidad_mostrada = valor_mostrado(disponible, "fuerza", unidad_fuerza)
+    simbolo_demanda = "Vu" if metodo == "LRFD" else "Va"
+    simbolo_capacidad = "ϕvVn" if metodo == "LRFD" else "Vn/Ωv"
+    titulo = "Verificación de la solicitación"
+    if etiqueta:
+        titulo += f" — {etiqueta}"
+    return _mostrar_verificacion_solicitacion(
+        demanda=demanda_mostrada, capacidad=capacidad_mostrada, unidad=unidad_fuerza,
+        metodo=metodo, etiqueta_demanda=f"Demanda {simbolo_demanda}",
+        etiqueta_capacidad=f"Capacidad {simbolo_capacidad}", titulo=titulo,
     )
-    if razon <= 1.0:
-        st.success(mensaje + " Cumple.")
-    else:
-        st.error(mensaje + " No cumple.")
 
 
 def mostrar_ruta_y_diseno_capitulo_g(
@@ -1198,10 +1260,12 @@ def mostrar_ruta_y_diseno_capitulo_g(
                 _comparar_cortante(base, metodo, Vr_general, uP, "Alma sin rigidizadores")
 
             disponible_base = capacidad_disponible(base.adoptado, metodo)
+            Cv_base = 1.0 if base.adoptado.Cv is None else float(base.adoptado.Cv)
             necesita, observaciones_necesidad = rigidizadores_requeridos_g24(
                 E=E, Fy=Fy, h=h, tw=tw,
                 resistencia_disponible_sin_rigidizadores=disponible_base,
                 cortante_requerido=Vr_general,
+                Cv_sin_rigidizadores=Cv_base,
             )
             for obs in observaciones_necesidad:
                 if necesita is True:
@@ -1211,15 +1275,47 @@ def mostrar_ruta_y_diseno_capitulo_g(
                 else:
                     st.info(obs)
 
-            agregar = st.checkbox(
-                "Incorporar o verificar rigidizadores transversales interiores",
-                value=False, key=f"G2_incorporar_rigidizadores_{perfil}",
-                help=(
-                    "Los rigidizadores son placas perpendiculares al eje longitudinal de la viga. "
-                    "Dividen el alma en paneles. La aplicación primero comprobó el alma sin "
-                    "rigidizadores; active esta opción para formar y verificar paneles rigidizados."
-                ),
-            )
+            falla_base = Vr_general is not None and Vr_general > disponible_base
+            pandeo_reduce = Cv_base < 1.0 - 1e-9
+            if falla_base and not pandeo_reduce:
+                st.error(
+                    "La sección no cumple a cortante y Cv=1.00, por lo que gobierna la fluencia "
+                    "del área resistente. Reducir la separación entre rigidizadores no puede aumentar "
+                    "0.6FyAw. Debe aumentar el área del alma, reforzarla para que participe en la "
+                    "resistencia o seleccionar una sección mayor."
+                )
+            elif falla_base and pandeo_reduce:
+                st.warning(
+                    "La sección no cumple y Cv<1.00: la resistencia está reducida por pandeo del alma. "
+                    "Los rigidizadores pueden aumentar kv y Cv; en paneles interiores también puede "
+                    "evaluarse la acción de campo de tracción de G2.2."
+                )
+            elif Vr_general is None:
+                st.info(
+                    "Active la comparación con un cortante requerido para determinar si los "
+                    "rigidizadores son necesarios por resistencia."
+                )
+
+            permitir_configuracion = Vr_general is not None and not (falla_base and not pandeo_reduce)
+            if permitir_configuracion:
+                etiqueta_rigidizadores = (
+                    "Incorporar y verificar rigidizadores transversales interiores"
+                    if necesita is True
+                    else "Verificar rigidizadores existentes de manera opcional"
+                )
+                agregar = st.checkbox(
+                    etiqueta_rigidizadores,
+                    value=False, key=f"G2_incorporar_rigidizadores_{perfil}",
+                    help=(
+                        "Los rigidizadores son placas perpendiculares al eje longitudinal de la viga. "
+                        "Dividen el alma en paneles. Cuando Cv<1 pueden aumentar la resistencia al "
+                        "pandeo; cuando Cv=1 no aumentan el límite de fluencia 0.6FyAw."
+                    ),
+                )
+            else:
+                st.session_state.pop(f"G2_incorporar_rigidizadores_{perfil}", None)
+                agregar = False
+
             if agregar:
                 st.markdown("### Configuración de la zona rigidizada")
                 numero = st.radio(
@@ -1525,6 +1621,8 @@ def mostrar_ruta_y_diseno_capitulo_e(
     cvL = lambda v, p=1: valor_mostrado(v, "longitud", uL, p)
     cvF = lambda v: valor_mostrado(v, "esfuerzo", uF)
     cvP = lambda v: valor_mostrado(v, "fuerza", uP)
+    Pn_comparacion = None
+    fuente_Pn_comparacion = ""
     if perfil in {"Perfil I", "Perfil I asimétrico"}:
         sup = cubreplacas_grafico.get("superior")
         inf = cubreplacas_grafico.get("inferior")
@@ -1585,6 +1683,9 @@ def mostrar_ruta_y_diseno_capitulo_e(
         st.caption(ruta.explicacion)
         st.code(f"{perfil} → {ruta.simetria} → {'con' if ruta.tiene_elementos_esbeltos else 'sin'} elementos esbeltos → {' / '.join(ruta.secciones)}")
 
+    e4_valido_para_comparar = not any(estado in ruta.estados_limite for estado in ("TB", "FTB"))
+    e7_valido_para_comparar = not ruta.tiene_elementos_esbeltos
+
     with st.expander("E2 — Longitudes efectivas", expanded=False):
         st.info("Ag, rx, ry, Ix, Iy y J se toman automáticamente de la geometría ingresada.")
         Ag, rx, ry = prop.Ag, prop.rx, prop.ry
@@ -1621,6 +1722,8 @@ def mostrar_ruta_y_diseno_capitulo_e(
                     q4.metric("Pn", f"{cvP(r.Pn):.3f} {uP}")
                     st.caption(f"Fn por {r.ecuacion_fn}; {r.observacion}")
             gob = min((res_x,res_y), key=lambda r:r.Pn)
+            Pn_comparacion = gob.Pn
+            fuente_Pn_comparacion = f"E3 alrededor de {gob.eje}"
             st.warning(f"Gobierna E3 alrededor de **{gob.eje}**, con Pn = **{cvP(gob.Pn):.3f} {uP}**.")
         except ValueError as exc:
             st.error(str(exc))
@@ -1766,6 +1869,10 @@ def mostrar_ruta_y_diseno_capitulo_e(
                         f"Fn por {r4.ecuacion_fn}. Comparar Pn de E4 con Pn de E3 "
                         "y adoptar el menor."
                     )
+                    e4_valido_para_comparar = True
+                    if Pn_comparacion is None or r4.Pn < Pn_comparacion:
+                        Pn_comparacion = r4.Pn
+                        fuente_Pn_comparacion = modo
                 except ValueError as exc:
                     st.error(str(exc))
     else:
@@ -1824,7 +1931,11 @@ def mostrar_ruta_y_diseno_capitulo_e(
                 try:
                     Ae,eq=area_efectiva_tubo_circular(D=geo["D"],t=geo["t"],E=E,Fy=Fy,Ag=Ag)
                     st.write(f"**Ae = {cvL(Ae,2):.3f} {uA}** por **{eq}**")
-                    st.metric("Pn = Fn·Ae",f"{cvP(Fn_global*Ae):.3f} {uP}")
+                    Pn_e7 = Fn_global * Ae
+                    Pn_comparacion = Pn_e7
+                    fuente_Pn_comparacion = "E7 — área efectiva"
+                    e7_valido_para_comparar = True
+                    st.metric("Pn = Fn·Ae",f"{cvP(Pn_e7):.3f} {uP}")
                 except ValueError as exc:
                     st.error(str(exc))
             else:
@@ -1852,9 +1963,58 @@ def mostrar_ruta_y_diseno_capitulo_e(
                     try:
                         Ae,detalle=area_efectiva_desde_elementos(Ag=Ag,elementos=elementos)
                         st.metric("Área efectiva Ae",f"{cvL(Ae,2):.3f} {uA}")
-                        st.metric("Resistencia nominal Pn = Fn·Ae",f"{cvP(Fn_global*Ae):.3f} {uP}")
+                        Pn_e7 = Fn_global * Ae
+                        Pn_comparacion = Pn_e7
+                        fuente_Pn_comparacion = "E7 — área efectiva"
+                        e7_valido_para_comparar = True
+                        st.metric("Resistencia nominal Pn = Fn·Ae",f"{cvP(Pn_e7):.3f} {uP}")
                     except ValueError as exc:
                         st.error(str(exc))
+
+    comparacion_axial_completa = (
+        Pn_comparacion is not None
+        and e4_valido_para_comparar
+        and e7_valido_para_comparar
+        and "E5" not in ruta.secciones
+        and "E6" not in ruta.secciones
+    )
+    if comparacion_axial_completa:
+        with st.expander("Verificación de la solicitación axial", expanded=False):
+            st.caption(f"Capacidad nominal adoptada para comparar: {fuente_Pn_comparacion}.")
+            metodo_e = st.radio(
+                "Método de diseño para la comparación", ["LRFD", "ASD"],
+                horizontal=True, key=f"E_metodo_demanda_{perfil}",
+                help=(
+                    "LRFD compara Pu con ϕcPn usando ϕc=0.90. "
+                    "ASD compara Pa con Pn/Ωc usando Ωc=1.67. "
+                    "Este bloque no modifica los cálculos del Capítulo E."
+                ),
+            )
+            comparar_e = st.checkbox(
+                "Comparar con una carga axial requerida", value=False,
+                key=f"E_comparar_demanda_{perfil}",
+            )
+            if comparar_e:
+                etiqueta_p = "Carga axial requerida Pu" if metodo_e == "LRFD" else "Carga axial requerida Pa"
+                Preq = entrada_magnitud(
+                    etiqueta_p, key=f"E_Preq_{perfil}_{metodo_e}", magnitud="fuerza",
+                    unidad=uP, valor_inicial_interno=100_000.0, min_interno=0.0,
+                    help=(
+                        "Ingrese la compresión solicitante. Use combinaciones factorizadas para LRFD "
+                        "y combinaciones de servicio para ASD."
+                    ),
+                )
+                capacidad_e = 0.90 * Pn_comparacion if metodo_e == "LRFD" else Pn_comparacion / 1.67
+                _mostrar_verificacion_solicitacion(
+                    demanda=cvP(Preq), capacidad=cvP(capacidad_e), unidad=uP, metodo=metodo_e,
+                    etiqueta_demanda="Demanda Pu" if metodo_e == "LRFD" else "Demanda Pa",
+                    etiqueta_capacidad="Capacidad ϕcPn" if metodo_e == "LRFD" else "Capacidad Pn/Ωc",
+                )
+    elif Pn_comparacion is not None:
+        st.caption(
+            "La comparación axial se habilita cuando todos los estados límite aplicables "
+            "han producido una resistencia nominal final. Revise los bloques E4, E5, E6 o E7 pendientes."
+        )
 
 # -----------------------------------------------------------------------------
 # Barra lateral
