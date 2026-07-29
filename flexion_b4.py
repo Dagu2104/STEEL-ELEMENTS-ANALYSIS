@@ -1,195 +1,348 @@
-"""Clasificación local para flexión según Tabla B4.1b.
+"""Clasificación local para miembros sometidos a flexión según la Tabla B4.1b.
 
-Sistema interno esperado: longitudes en mm y esfuerzos en MPa.
-Este módulo solo clasifica elementos como compactos, no compactos o esbeltos.
-No calcula resistencia del Capítulo F.
+La clasificación obtenida es COMPACTO, NO COMPACTO o ESBELTO. Este módulo no
+calcula resistencia nominal a flexión ni aplica el Capítulo F.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from math import sqrt
 
 
 @dataclass(frozen=True)
-class ResultadoFlexion:
+class ResultadoFlexionB4:
+    perfil: str
     elemento: str
-    caso: int
-    condicion: str
+    caso_tabla: str
     relacion: str
-    formula_lp: str
-    formula_lr: str
+    formula_lambda_p: str
+    formula_lambda_r: str
     lambda_real: float
     lambda_p: float
     lambda_r: float
     clasificacion: str
     observacion: str = ""
 
-    def como_dict(self):
+    def como_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
-def _pos(nombre: str, valor: float) -> None:
+def _positivo(nombre: str, valor: float) -> None:
     if valor <= 0:
         raise ValueError(f"{nombre} debe ser mayor que cero.")
 
 
-def _kc(h: float, tw: float) -> float:
-    _pos("h", h); _pos("tw", tw)
-    return max(0.35, min(0.76, 4.0 / sqrt(h / tw)))
+def _limitar(valor: float, minimo: float, maximo: float) -> float:
+    return max(minimo, min(valor, maximo))
 
 
-def _clasificar(lam: float, lp: float, lr: float) -> str:
-    if not (lp <= lr + 1e-12):
-        raise ValueError("Se obtuvo λp > λr; revise geometría y propiedades.")
-    if lam <= lp:
+def calcular_kc(h: float, tw: float) -> float:
+    _positivo("h", h)
+    _positivo("tw", tw)
+    return _limitar(4.0 / sqrt(h / tw), 0.35, 0.76)
+
+
+def clasificar_flexion(lambda_real: float, lambda_p: float, lambda_r: float) -> str:
+    for nombre, valor in {
+        "lambda real": lambda_real,
+        "lambda_p": lambda_p,
+        "lambda_r": lambda_r,
+    }.items():
+        _positivo(nombre, valor)
+    if lambda_p > lambda_r:
+        raise ValueError("lambda_p no puede ser mayor que lambda_r.")
+    if lambda_real <= lambda_p:
         return "COMPACTO"
-    if lam <= lr:
+    if lambda_real <= lambda_r:
         return "NO COMPACTO"
     return "ESBELTO"
 
 
-def _res(elemento, caso, condicion, relacion, flp, flr, lam, lp, lr, obs=""):
-    return ResultadoFlexion(
-        elemento=elemento, caso=caso, condicion=condicion, relacion=relacion,
-        formula_lp=flp, formula_lr=flr, lambda_real=lam,
-        lambda_p=lp, lambda_r=lr, clasificacion=_clasificar(lam, lp, lr),
-        observacion=obs,
+def _resultado(
+    *, perfil: str, elemento: str, caso: int, relacion: str,
+    formula_p: str, formula_r: str, lam: float, lp: float, lr: float,
+    observacion: str = "",
+) -> ResultadoFlexionB4:
+    return ResultadoFlexionB4(
+        perfil=perfil,
+        elemento=elemento,
+        caso_tabla=f"Caso {caso}",
+        relacion=relacion,
+        formula_lambda_p=formula_p,
+        formula_lambda_r=formula_r,
+        lambda_real=lam,
+        lambda_p=lp,
+        lambda_r=lr,
+        clasificacion=clasificar_flexion(lam, lp, lr),
+        observacion=observacion,
     )
 
 
-def _pna_y_perfil_i(bf, tf, h, tw, cubreplacas=None):
-    """Eje neutro plástico y centroide de I con cubreplacas mediante rectángulos."""
-    rects = [
-        (-bf/2, 0.0, bf, tf),
-        (-tw/2, tf, tw, h),
-        (-bf/2, tf+h, bf, tf),
-    ]
+def _pna_horizontal_perfil_i(geo: dict, cubreplacas: dict | None) -> float:
+    """Eje neutro plástico horizontal medido desde la cara inferior extrema."""
+    bf, tf, h, tw = geo["bf"], geo["tf"], geo["h"], geo["tw"]
     cp = cubreplacas or {}
-    d = h + 2*tf
-    if cp.get("inferior"):
-        q = cp["inferior"]; B = float(q["B"]); t = float(q["t"])
-        rects.append((-B/2, -t, B, t))
-    if cp.get("superior"):
-        q = cp["superior"]; B = float(q["B"]); t = float(q["t"])
-        rects.append((-B/2, d, B, t))
-    A = sum(b*hh for _,_,b,hh in rects)
-    ybar = sum(b*hh*(y+hh/2) for _,y,b,hh in rects)/A
-    lo = min(y for _,y,_,_ in rects); hi = max(y+hh for _,y,_,hh in rects)
-    def abajo(ycut):
-        return sum(b*min(max(ycut-y,0.0),hh) for _,y,b,hh in rects)
-    for _ in range(90):
-        mid=(lo+hi)/2
-        if abajo(mid)<A/2: lo=mid
-        else: hi=mid
-    return ybar, (lo+hi)/2, min(y for _,y,_,_ in rects), max(y+hh for _,y,_,hh in rects)
+    t_inf = float(cp.get("inferior", {}).get("t", 0.0))
+    t_sup = float(cp.get("superior", {}).get("t", 0.0))
+    b_inf = float(cp.get("inferior", {}).get("B", cp.get("inferior", {}).get("b", 0.0)))
+    b_sup = float(cp.get("superior", {}).get("B", cp.get("superior", {}).get("b", 0.0)))
+
+    # Coordenadas desde la fibra extrema inferior, incluyendo cubreplaca inferior.
+    rects: list[tuple[float, float, float]] = []  # y0, alto, ancho
+    if t_inf > 0:
+        rects.append((0.0, t_inf, b_inf))
+    y0 = t_inf
+    rects.extend([
+        (y0, tf, bf),
+        (y0 + tf, h, tw),
+        (y0 + tf + h, tf, bf),
+    ])
+    if t_sup > 0:
+        rects.append((y0 + 2.0 * tf + h, t_sup, b_sup))
+
+    area_total = sum(alto * ancho for _, alto, ancho in rects)
+    objetivo = area_total / 2.0
+    lo = min(y for y, _, _ in rects)
+    hi = max(y + alto for y, alto, _ in rects)
+    for _ in range(100):
+        mid = 0.5 * (lo + hi)
+        area = 0.0
+        for y, alto, ancho in rects:
+            area += ancho * min(max(mid - y, 0.0), alto)
+        if area < objetivo:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
 
 
-def evaluar_flexion(
-    *, perfil: str, fabricacion: str, eje: str, sentido: str,
-    geo: dict, E: float, Fy: float, propiedades=None,
+def _limites_caso16(
+    *, E: float, Fy: float, geo: dict, propiedades, cubreplacas: dict | None,
+    lado_compresion: str,
+) -> tuple[float, float, str]:
+    """Caso 16 para alma de sección I monosimétrica en flexión mayor."""
+    bf, tf, h, tw = geo["bf"], geo["tf"], geo["h"], geo["tw"]
+    cp = cubreplacas or {}
+    t_inf = float(cp.get("inferior", {}).get("t", 0.0))
+    t_sup = float(cp.get("superior", {}).get("t", 0.0))
+    altura_total = h + 2.0 * tf + t_inf + t_sup
+    y_bar = propiedades.y_bar
+    yp = _pna_horizontal_perfil_i(geo, cp)
+
+    if lado_compresion == "Superior":
+        cara_interior = t_inf + tf + h
+        c_comp = altura_total - y_bar
+        Sxc = propiedades.Sx_sup
+        Sxt = propiedades.Sx_inf
+    else:
+        cara_interior = t_inf + tf
+        c_comp = y_bar
+        Sxc = propiedades.Sx_inf
+        Sxt = propiedades.Sx_sup
+
+    hc = 2.0 * abs(cara_interior - y_bar)
+    hp = 2.0 * abs(cara_interior - yp)
+    _positivo("hc", hc)
+    _positivo("hp", hp)
+    _positivo("Sxc", Sxc)
+    _positivo("Sxt", Sxt)
+    _positivo("c de compresión", c_comp)
+
+    Mp = Fy * propiedades.Zx
+    My = Fy * Sxc
+    relacion_modulos = Sxt / Sxc
+    FL = 0.7 * Fy if relacion_modulos >= 0.7 else max(0.5 * Fy, Fy * relacion_modulos)
+
+    denominador = (0.54 * Mp / My - 0.09) ** 2
+    _positivo("denominador del caso 16", denominador)
+    lp = (hc / hp) * sqrt(E / Fy) / denominador
+    lr = 5.70 * sqrt(E / Fy)
+    lp = min(lp, lr)
+    obs = (
+        f"Sección I monosimétrica; hc={hc:.3f}, hp={hp:.3f}, "
+        f"Mp/My={Mp/My:.3f}, Sxt/Sxc={relacion_modulos:.3f}, FL={FL:.3f}."
+    )
+    return lp, lr, obs
+
+
+def evaluar_flexion_b4(
+    *, perfil: str, fabricacion: str | None, eje: str, lado_compresion: str,
+    geo: dict, E: float, Fy: float, propiedades,
     cubreplacas: dict | None = None,
-) -> list[ResultadoFlexion]:
-    """Selecciona automáticamente casos 10 a 21 de B4.1b."""
-    _pos("E", E); _pos("Fy", Fy)
-    raiz = sqrt(E/Fy)
-    resultados: list[ResultadoFlexion] = []
-    comp_sup = sentido == "Superior en compresión"
+) -> list[ResultadoFlexionB4]:
+    """Evalúa automáticamente los casos aplicables de la Tabla B4.1b."""
+    for nombre, valor in {"E": E, "Fy": Fy}.items():
+        _positivo(nombre, valor)
+    if eje not in {"x-x", "y-y"}:
+        raise ValueError("El eje debe ser 'x-x' o 'y-y'.")
+    if lado_compresion not in {"Superior", "Inferior", "Derecha", "Izquierda"}:
+        raise ValueError("Lado de compresión no reconocido.")
+
+    raiz = sqrt(E / Fy)
+    resultados: list[ResultadoFlexionB4] = []
+    cp = cubreplacas or {}
 
     if perfil == "Perfil I":
         bf, tf, h, tw = geo["bf"], geo["tf"], geo["h"], geo["tw"]
-        for n,v in {"bf":bf,"tf":tf,"h":h,"tw":tw}.items(): _pos(n,v)
-        cp = cubreplacas or {}
-        asim = bool(cp.get("superior")) != bool(cp.get("inferior"))
-        if cp.get("superior") and cp.get("inferior"):
-            asim = abs(cp["superior"]["B"]-cp["inferior"]["B"])>1e-9 or abs(cp["superior"]["t"]-cp["inferior"]["t"])>1e-9
+        if eje == "y-y":
+            resultados.append(_resultado(
+                perfil=perfil, elemento="Patines en flexión alrededor de y-y", caso=13,
+                relacion="bf/(2·tf)", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+                lam=bf/(2.0*tf), lp=0.38*raiz, lr=1.00*raiz,
+                observacion="Caso de alas de perfiles I en flexión respecto al eje menor.",
+            ))
+            return resultados
 
+        # Flexión mayor x-x.
+        if fabricacion == "Built-up":
+            kc = calcular_kc(h, tw)
+            Sxc = propiedades.Sx_sup if lado_compresion == "Superior" else propiedades.Sx_inf
+            Sxt = propiedades.Sx_inf if lado_compresion == "Superior" else propiedades.Sx_sup
+            razon = Sxt / Sxc
+            FL = 0.7 * Fy if razon >= 0.7 else max(0.5 * Fy, Fy * razon)
+            resultados.append(_resultado(
+                perfil=perfil, elemento=f"Patín {lado_compresion.lower()} comprimido", caso=11,
+                relacion="bf/(2·tf)", formula_p="0.38·√(E/Fy)", formula_r="0.95·√(kc·E/FL)",
+                lam=bf/(2.0*tf), lp=0.38*raiz, lr=0.95*sqrt(kc*E/FL),
+                observacion=f"kc={kc:.3f}; FL={FL:.3f}; Sxt/Sxc={razon:.3f}.",
+            ))
+        else:
+            resultados.append(_resultado(
+                perfil=perfil, elemento=f"Patín {lado_compresion.lower()} comprimido", caso=10,
+                relacion="bf/(2·tf)", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+                lam=bf/(2.0*tf), lp=0.38*raiz, lr=1.00*raiz,
+            ))
+
+        # Se considera monosimétrico si las cubreplacas no son iguales y simétricas.
+        sup = cp.get("superior")
+        inf = cp.get("inferior")
+        doble_simetria = (
+            not sup and not inf
+        ) or (
+            sup and inf
+            and abs(float(sup.get("B", sup.get("b"))) - float(inf.get("B", inf.get("b")))) < 1e-9
+            and abs(float(sup["t"]) - float(inf["t"])) < 1e-9
+        )
+        if doble_simetria:
+            resultados.append(_resultado(
+                perfil=perfil, elemento="Alma", caso=15, relacion="h/tw",
+                formula_p="3.76·√(E/Fy)", formula_r="5.70·√(E/Fy)",
+                lam=h/tw, lp=3.76*raiz, lr=5.70*raiz,
+            ))
+        else:
+            lp, lr, obs = _limites_caso16(
+                E=E, Fy=Fy, geo=geo, propiedades=propiedades,
+                cubreplacas=cp, lado_compresion=lado_compresion,
+            )
+            resultados.append(_resultado(
+                perfil=perfil, elemento="Alma de sección I monosimétrica", caso=16,
+                relacion="hc/tw", formula_p="(hc/hp)·√(E/Fy)/(0.54·Mp/My−0.09)²",
+                formula_r="5.70·√(E/Fy)",
+                lam=(2.0*abs((geo["tf"] + (geo["h"] if lado_compresion == "Superior" else 0.0)) - propiedades.y_bar))/tw,
+                lp=lp, lr=lr, observacion=obs,
+            ))
+
+        clave_cp = "superior" if lado_compresion == "Superior" else "inferior"
+        if cp.get(clave_cp):
+            q = cp[clave_cp]
+            resultados.append(_resultado(
+                perfil=perfil, elemento=f"Cubreplaca {clave_cp}", caso=18,
+                relacion="b/t", formula_p="1.12·√(E/Fy)", formula_r="1.40·√(E/Fy)",
+                lam=float(q["b"])/float(q["t"]), lp=1.12*raiz, lr=1.40*raiz,
+                observacion="Se evalúa únicamente la cubreplaca ubicada en el lado comprimido.",
+            ))
+        return resultados
+
+    if perfil == "Canal":
+        b, tf, h, tw = geo["b"], geo["tf"], geo["h"], geo["tw"]
         if eje == "x-x":
-            b = bf/2.0
-            if fabricacion == "Rolled":
-                lp=0.38*raiz; lr=1.0*raiz
-                resultados.append(_res("Patín comprimido",10,"No rigidizado","bf/(2·tf)","0.38√(E/Fy)","1.0√(E/Fy)",b/tf,lp,lr))
-            else:
-                kc=_kc(h,tw)
-                # FL según nota [b], usando módulos del lado comprimido/traccionado.
-                if propiedades is None:
-                    ratio_st=1.0
-                elif comp_sup:
-                    ratio_st=propiedades.Sx_inf/propiedades.Sx_sup
-                else:
-                    ratio_st=propiedades.Sx_sup/propiedades.Sx_inf
-                FL = 0.7*Fy if ratio_st >= 0.7 else max(0.5*Fy, Fy*ratio_st)
-                lp=0.38*raiz; lr=0.95*sqrt(kc*E/FL)
-                resultados.append(_res("Patín comprimido",11,"No rigidizado","bf/(2·tf)","0.38√(E/Fy)","0.95√(kc·E/FL)",b/tf,lp,lr,f"kc={kc:.3f}; FL={FL:.3f}; Sxt/Sxc={ratio_st:.3f}."))
-
-            if asim:
-                if propiedades is None:
-                    raise ValueError("El caso 16 requiere propiedades geométricas calculadas.")
-                ybar, yp, ymin, ymax = _pna_y_perfil_i(bf,tf,h,tw,cp)
-                cara = tf+h if comp_sup else tf
-                hc = 2*abs(cara-ybar); hp = 2*abs(cara-yp)
-                Sxc = propiedades.Sx_sup if comp_sup else propiedades.Sx_inf
-                My = Fy*Sxc; Mp = Fy*propiedades.Zx
-                den=(0.54*(Mp/My)-0.09)**2
-                lp=(hc/hp)*raiz/den
-                lr=5.70*raiz
-                lp=min(lp,lr)
-                resultados.append(_res("Alma monosimétrica",16,"Rigidizado","hc/tw","(hc/hp)√(E/Fy)/(0.54Mp/My−0.09)²","5.70√(E/Fy)",hc/tw,lp,lr,f"hc={hc:.3f}, hp={hp:.3f}, Mp/My={Mp/My:.3f}."))
-            else:
-                resultados.append(_res("Alma",15,"Rigidizado","h/tw","3.76√(E/Fy)","5.70√(E/Fy)",h/tw,3.76*raiz,5.70*raiz))
+            resultados.extend([
+                _resultado(perfil=perfil, elemento="Patín comprimido", caso=10, relacion="b/tf",
+                           formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+                           lam=b/tf, lp=0.38*raiz, lr=1.00*raiz),
+                _resultado(perfil=perfil, elemento="Alma", caso=15, relacion="h/tw",
+                           formula_p="3.76·√(E/Fy)", formula_r="5.70·√(E/Fy)",
+                           lam=h/tw, lp=3.76*raiz, lr=5.70*raiz),
+            ])
         else:
-            resultados.append(_res("Patines en flexión respecto a eje menor",13,"No rigidizado","bf/(2·tf)","0.38√(E/Fy)","1.0√(E/Fy)",bf/(2*tf),0.38*raiz,1.0*raiz))
+            resultados.append(_resultado(
+                perfil=perfil, elemento="Patines en flexión alrededor de y-y", caso=13,
+                relacion="b/tf", formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+                lam=b/tf, lp=0.38*raiz, lr=1.00*raiz,
+            ))
+        return resultados
 
-        cp_comp = cp.get("superior" if comp_sup else "inferior")
-        if cp_comp:
-            bcp = float(cp_comp.get("b", cp_comp["B"])); tcp=float(cp_comp["t"])
-            resultados.append(_res("Cubreplaca del ala comprimida",18,"Rigidizado","b/t","1.12√(E/Fy)","1.40√(E/Fy)",bcp/tcp,1.12*raiz,1.40*raiz,"b es la distancia entre líneas de pernos o soldaduras."))
+    if perfil == "Tee":
+        b, tf, d, tw = geo["b"], geo["tf"], geo["d"], geo["tw"]
+        resultados.append(_resultado(
+            perfil=perfil, elemento="Patín", caso=10, relacion="b/tf",
+            formula_p="0.38·√(E/Fy)", formula_r="1.00·√(E/Fy)",
+            lam=b/tf, lp=0.38*raiz, lr=1.00*raiz,
+        ))
+        resultados.append(_resultado(
+            perfil=perfil, elemento="Vástago", caso=14, relacion="d/tw",
+            formula_p="0.84·√(E/Fy)", formula_r="1.52·√(E/Fy)",
+            lam=d/tw, lp=0.84*raiz, lr=1.52*raiz,
+            observacion=f"Lado indicado en compresión: {lado_compresion.lower()}.",
+        ))
+        return resultados
 
-    elif perfil == "Canal":
-        b,tf,h,tw=geo["b"],geo["tf"],geo["h"],geo["tw"]
-        if eje=="x-x":
-            resultados.append(_res("Patín comprimido",10,"No rigidizado","b/tf","0.38√(E/Fy)","1.0√(E/Fy)",b/tf,0.38*raiz,1.0*raiz))
-            resultados.append(_res("Alma",15,"Rigidizado","h/tw","3.76√(E/Fy)","5.70√(E/Fy)",h/tw,3.76*raiz,5.70*raiz))
+    if perfil in {"Ángulo simple", "Ángulo doble con separadores"}:
+        b1, b2, t = geo["b1"], geo["b2"], geo["t"]
+        resultados.extend([
+            _resultado(perfil=perfil, elemento="Pata 1", caso=12, relacion="b1/t",
+                       formula_p="0.54·√(E/Fy)", formula_r="0.91·√(E/Fy)",
+                       lam=b1/t, lp=0.54*raiz, lr=0.91*raiz),
+            _resultado(perfil=perfil, elemento="Pata 2", caso=12, relacion="b2/t",
+                       formula_p="0.54·√(E/Fy)", formula_r="0.91·√(E/Fy)",
+                       lam=b2/t, lp=0.54*raiz, lr=0.91*raiz),
+        ])
+        return resultados
+
+    if perfil in {"Tubo cuadrado", "Tubo rectangular"}:
+        B, H, t = geo["B"], geo["H"], geo["t"]
+        descuento = 3.0*t if fabricacion == "Rolled" else 2.0*t
+        b_plano, h_plano = B-descuento, H-descuento
+        if min(b_plano, h_plano) <= 0:
+            raise ValueError("Las dimensiones planas del tubo deben ser positivas.")
+        if eje == "x-x":
+            b_pat, h_alma = b_plano, h_plano
+            nom_pat, nom_alma = "Paredes horizontales (patines)", "Paredes verticales (almas)"
         else:
-            resultados.append(_res("Patines en flexión respecto a eje menor",13,"No rigidizado","b/tf","0.38√(E/Fy)","1.0√(E/Fy)",b/tf,0.38*raiz,1.0*raiz))
+            b_pat, h_alma = h_plano, b_plano
+            nom_pat, nom_alma = "Paredes verticales (patines)", "Paredes horizontales (almas)"
+        caso_pat = 17 if fabricacion == "Rolled" else 21
+        lr_pat = (1.40 if fabricacion == "Rolled" else 1.49)*raiz
+        resultados.extend([
+            _resultado(perfil=perfil, elemento=nom_pat, caso=caso_pat, relacion="b/t",
+                       formula_p="1.12·√(E/Fy)",
+                       formula_r=("1.40·√(E/Fy)" if fabricacion == "Rolled" else "1.49·√(E/Fy)"),
+                       lam=b_pat/t, lp=1.12*raiz, lr=lr_pat),
+            _resultado(perfil=perfil, elemento=nom_alma, caso=19, relacion="h/t",
+                       formula_p="2.42·√(E/Fy)", formula_r="5.70·√(E/Fy)",
+                       lam=h_alma/t, lp=2.42*raiz, lr=5.70*raiz),
+        ])
+        return resultados
 
-    elif perfil == "Tee":
-        b,tf,d,tw=geo["b"],geo["tf"],geo["d"],geo["tw"]
-        if eje=="x-x":
-            if comp_sup:
-                resultados.append(_res("Patín comprimido",10,"No rigidizado","b/tf","0.38√(E/Fy)","1.0√(E/Fy)",b/tf,0.38*raiz,1.0*raiz))
-            else:
-                resultados.append(_res("Vástago comprimido",14,"No rigidizado","d/tw","0.84√(E/Fy)","1.52√(E/Fy)",d/tw,0.84*raiz,1.52*raiz))
-        else:
-            resultados.append(_res("Patín en flexión respecto a eje menor",13,"No rigidizado","b/tf","0.38√(E/Fy)","1.0√(E/Fy)",b/tf,0.38*raiz,1.0*raiz))
+    if perfil == "Tubo circular":
+        D, t = geo["D"], geo["t"]
+        resultados.append(_resultado(
+            perfil=perfil, elemento="Pared circular", caso=20, relacion="D/t",
+            formula_p="0.07·E/Fy", formula_r="0.31·E/Fy",
+            lam=D/t, lp=0.07*E/Fy, lr=0.31*E/Fy,
+        ))
+        return resultados
 
-    elif perfil == "Ángulo simple":
-        for nombre,b in (("Pata 1",geo["b1"]),("Pata 2",geo["b2"])):
-            resultados.append(_res(nombre,12,"No rigidizado",f"{nombre}/t","0.54√(E/Fy)","0.91√(E/Fy)",b/geo["t"],0.54*raiz,0.91*raiz))
-
-    elif perfil == "Ángulo doble con separadores":
-        # La tabla mostrada no contiene una fila específica para ángulos dobles en flexión.
-        raise ValueError("La Tabla B4.1b mostrada no define un caso directo para ángulos dobles en flexión. Evalúe cada ángulo según la disposición y el eje correspondiente.")
-
-    elif perfil in {"Tubo cuadrado","Tubo rectangular"}:
-        B,H,t=geo["B"],geo["H"],geo["t"]
-        if eje=="x-x": b_flange=B-2*t; h_web=H-2*t
-        else: b_flange=H-2*t; h_web=B-2*t
-        if fabricacion=="Rolled":
-            resultados.append(_res("Paredes que actúan como patines",17,"Rigidizado","b/t","1.12√(E/Fy)","1.40√(E/Fy)",b_flange/t,1.12*raiz,1.40*raiz,"Se usa dimensión exterior menos 2t; ajuste a la definición de ancho plano del producto si dispone del radio interior."))
-        else:
-            resultados.append(_res("Placas que actúan como patines",21,"Rigidizado","b/t","1.12√(E/Fy)","1.49√(E/Fy)",b_flange/t,1.12*raiz,1.49*raiz))
-        resultados.append(_res("Paredes que actúan como almas",19,"Rigidizado","h/t","2.42√(E/Fy)","5.70√(E/Fy)",h_web/t,2.42*raiz,5.70*raiz))
-
-    elif perfil == "Tubo circular":
-        D,t=geo["D"],geo["t"]
-        resultados.append(_res("Pared circular",20,"Caso circular","D/t","0.07E/Fy","0.31E/Fy",D/t,0.07*E/Fy,0.31*E/Fy))
-    else:
-        raise ValueError(f"Perfil no reconocido: {perfil}")
-
-    return resultados
+    raise ValueError(f"Perfil no reconocido para Tabla B4.1b: {perfil}")
 
 
-def clasificacion_global(resultados: list[ResultadoFlexion]) -> tuple[str, str]:
-    orden={"COMPACTO":0,"NO COMPACTO":1,"ESBELTO":2}
-    gob=max(resultados,key=lambda r:(orden[r.clasificacion], r.lambda_real/r.lambda_r))
-    return gob.clasificacion, gob.elemento
+def clasificacion_global(resultados: list[ResultadoFlexionB4]) -> tuple[str, ResultadoFlexionB4]:
+    if not resultados:
+        raise ValueError("No existen resultados de flexión.")
+    orden = {"COMPACTO": 0, "NO COMPACTO": 1, "ESBELTO": 2}
+    gobierna = max(
+        resultados,
+        key=lambda r: (orden[r.clasificacion], r.lambda_real / r.lambda_r),
+    )
+    return gobierna.clasificacion, gobierna

@@ -25,6 +25,7 @@ from capitulo_e import (
 
 from propiedades import calcular_propiedades, PropiedadesSeccion
 from unidades import a_interno, desde_interno, unidad_propiedad
+from flexion_b4 import evaluar_flexion_b4, clasificacion_global
 
 from funciones import (
     evaluar_angulo,
@@ -284,6 +285,50 @@ def mostrar_resultados(resultados):
 
 
 
+def mostrar_resultados_flexion(resultados):
+    """Presenta la clasificación local de la Tabla B4.1b."""
+    st.subheader("Clasificación local — Tabla B4.1b")
+    filas = []
+    for r in resultados:
+        filas.append({
+            "Elemento": r.elemento,
+            "Caso": r.caso_tabla,
+            "Relación": r.relacion,
+            "λ": round(r.lambda_real, 4),
+            "λp": round(r.lambda_p, 4),
+            "λr": round(r.lambda_r, 4),
+            "Clasificación": r.clasificacion,
+        })
+    st.dataframe(filas, use_container_width=True, hide_index=True)
+
+    for r in resultados:
+        icono = {"COMPACTO": "✅", "NO COMPACTO": "🟡", "ESBELTO": "⚠️"}[r.clasificacion]
+        with st.expander(f"{icono} {r.elemento} — {r.clasificacion}", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("λ", f"{r.lambda_real:.4f}")
+            c2.metric("λp", f"{r.lambda_p:.4f}")
+            c3.metric("λr", f"{r.lambda_r:.4f}")
+            st.write(
+                f"**{r.caso_tabla}** · Relación: `{r.relacion}` · "
+                f"λp: `{r.formula_lambda_p}` · λr: `{r.formula_lambda_r}`"
+            )
+            if r.observacion:
+                st.caption(r.observacion)
+
+    global_clas, gobierna = clasificacion_global(resultados)
+    mensaje = (
+        f"Clasificación global: **{global_clas}**. "
+        f"Gobierna: **{gobierna.elemento}** ({gobierna.caso_tabla})."
+    )
+    if global_clas == "COMPACTO":
+        st.success(mensaje)
+    elif global_clas == "NO COMPACTO":
+        st.warning(mensaje)
+    else:
+        st.error(mensaje)
+    st.caption("Esta pestaña solo aplica la Tabla B4.1b. No calcula resistencia a flexión ni aplica el Capítulo F.")
+
+
 def mostrar_ruta_y_diseno_capitulo_e(
     perfil, resultados, E, Fy, geo, cubreplacas_grafico, prop,
     unidad_esfuerzo: str, unidad_longitud: str, unidad_fuerza: str, unidad_momento: str,
@@ -529,6 +574,18 @@ with st.sidebar.expander("Configuración general", expanded=True):
         "Tubo cuadrado", "Tubo rectangular", "Tubo circular",
     ])
     eje = st.radio("Eje de análisis", ["x-x", "y-y"], help="Se conserva para flexión y flexocompresión.")
+    if eje == "x-x":
+        lado_compresion = st.radio(
+            "Lado en compresión para flexión",
+            ["Superior", "Inferior"],
+            help="Permite identificar el patín o cubreplaca comprimida en la Tabla B4.1b.",
+        )
+    else:
+        lado_compresion = st.radio(
+            "Lado en compresión para flexión",
+            ["Derecha", "Izquierda"],
+            help="Permite identificar el lado comprimido en flexión alrededor de y-y.",
+        )
 
 with st.sidebar.expander("Material", expanded=False):
     E = entrada_magnitud(
@@ -668,6 +725,31 @@ else:
 if error is None and error_propiedades:
     error = error_propiedades
 
+# -----------------------------------------------------------------------------
+# Evaluación de clasificación local para flexión — Tabla B4.1b
+# -----------------------------------------------------------------------------
+if propiedades is not None:
+    try:
+        resultados_flexion = evaluar_flexion_b4(
+            perfil=perfil,
+            fabricacion=fabricacion,
+            eje=eje,
+            lado_compresion=lado_compresion,
+            geo=geo,
+            E=E,
+            Fy=Fy,
+            propiedades=propiedades,
+            cubreplacas=cubreplacas_grafico,
+        )
+    except ValueError as exc:
+        resultados_flexion = []
+        error_flexion = str(exc)
+    else:
+        error_flexion = None
+else:
+    resultados_flexion = []
+    error_flexion = error_propiedades
+
 st.title("Verificación de perfiles estándar de acero")
 st.caption(
     f"Unidades seleccionadas: longitud {unidad_longitud}, esfuerzo {unidad_esfuerzo}, "
@@ -696,7 +778,16 @@ for tab, titulo in [
                     perfil, resultados, E, Fy, geo, cubreplacas_grafico,
                     propiedades, unidad_esfuerzo, unidad_longitud, unidad_fuerza, unidad_momento,
                 )
+        elif tab is tab_flexion:
+            st.info(
+                f"Flexión alrededor de **{eje}**. Lado indicado en compresión: "
+                f"**{lado_compresion}**. La clasificación se realiza únicamente con la Tabla B4.1b."
+            )
+            if error_flexion:
+                st.error(error_flexion)
+            elif resultados_flexion:
+                mostrar_resultados_flexion(resultados_flexion)
         else:
-            st.info("Las propiedades geométricas ya se calculan automáticamente. La resistencia de flexión y las ecuaciones de interacción se incorporarán en los módulos siguientes.")
+            st.info("Las propiedades geométricas ya se calculan automáticamente. Las ecuaciones de interacción se incorporarán en un módulo posterior.")
 
 st.caption("Herramienta de apoyo. Confirme siempre las definiciones geométricas y la edición normativa aplicable al proyecto.")

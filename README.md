@@ -44,3 +44,10 @@ Sube los archivos a la raíz del repositorio y selecciona `app.py` como archivo 
 ## Unidades personalizadas
 
 La barra lateral permite seleccionar independientemente las unidades de longitud, esfuerzo, fuerza y momento. El programa conserva un sistema interno consistente (`mm`, `MPa`, `N`, `N·mm`) y convierte automáticamente los valores ya ingresados cuando se cambia una unidad.
+
+## Clasificación para flexión — Tabla B4.1b
+
+La pestaña **Flexión** clasifica automáticamente los elementos como compactos,
+no compactos o esbeltos según el tipo de perfil, fabricación, eje de análisis y
+lado indicado en compresión. Esta etapa no calcula resistencia a flexión ni
+aplica el Capítulo F.
