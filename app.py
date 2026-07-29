@@ -13,6 +13,7 @@ from capitulo_e import (
     esfuerzo_nominal_compresion,
     esbeltez_modificada_angulo,
     esbeltez_modificada_builtup,
+    fe_flexotorsional_asimetrico,
     fe_flexotorsional_monosimetrico,
     fe_torsional_doble_simetria,
     longitud_efectiva,
@@ -57,29 +58,18 @@ def entrada_magnitud(label: str, *, key: str, magnitud: str, unidad: str,
     widget_key = f"_widget_{key}"
     if base_key not in st.session_state:
         st.session_state[base_key] = float(valor_inicial_interno)
-
-    # Streamlit elimina del estado las claves de widgets que dejan de renderizarse.
-    # Esto ocurre, por ejemplo, al cambiar de Perfil I a otro perfil y regresar.
-    # Las claves auxiliares _base_* y _unit_* permanecen, por lo que no basta con
-    # comprobar únicamente si cambió la unidad: también hay que reconstruir la
-    # clave visible del widget cuando ya no existe.
-    unidad_cambio = st.session_state.get(unit_key) != (unidad, potencia)
-    widget_no_existe = widget_key not in st.session_state
-    if unidad_cambio or widget_no_existe:
+    if st.session_state.get(unit_key) != (unidad, potencia):
         st.session_state[widget_key] = desde_interno(
             st.session_state[base_key], magnitud, unidad, potencia
         )
         st.session_state[unit_key] = (unidad, potencia)
-
     # Ajusta el valor visible si cambian límites dinámicos, por ejemplo b <= Bcp.
-    valor_widget = float(st.session_state[widget_key])
     if min_interno is not None:
         minimo_visible = desde_interno(min_interno, magnitud, unidad, potencia)
-        valor_widget = max(valor_widget, minimo_visible)
+        st.session_state[widget_key] = max(st.session_state[widget_key], minimo_visible)
     if max_interno is not None:
         maximo_visible = desde_interno(max_interno, magnitud, unidad, potencia)
-        valor_widget = min(valor_widget, maximo_visible)
-    st.session_state[widget_key] = valor_widget
+        st.session_state[widget_key] = min(st.session_state[widget_key], maximo_visible)
     kwargs = {"key": widget_key, "help": help}
     if min_interno is not None:
         kwargs["min_value"] = desde_interno(min_interno, magnitud, unidad, potencia)
@@ -411,8 +401,10 @@ def mostrar_ruta_y_diseno_capitulo_e(
         simetria = "Monosimétrica"
     elif perfil in {"Tubo cuadrado", "Tubo rectangular", "Tubo circular"}:
         simetria = "Doble simetría"
+    elif perfil == "Ángulo doble con separadores":
+        simetria = "Monosimétrica"
     else:
-        simetria = "Según ejes principales"
+        simetria = "Asimétrica"
 
     # E6 se detecta automáticamente. Solo aplica a perfiles formados por dos
     # componentes completos interconectados a intervalos. En la lista actual,
@@ -472,6 +464,8 @@ def mostrar_ruta_y_diseno_capitulo_e(
         if max(Lcx/rx, Lcy/ry) > 200:
             st.warning("La nota de usuario de E2 recomienda que Lc/r no exceda 200 para miembros diseñados a compresión.")
 
+    res_x = None
+    res_y = None
     with st.expander("E3 — Pandeo flexional", expanded=True):
         try:
             res_x = pandeo_flexional(eje="x-x", E=E, Fy=Fy, Ag=Ag, K=Kx, L=Lx, r=rx)
@@ -490,48 +484,165 @@ def mostrar_ruta_y_diseno_capitulo_e(
         except ValueError as exc:
             st.error(str(exc))
 
-    with st.expander("E4 — Pandeo torsional o flexotorsional", expanded=False):
-        activar_e4 = st.checkbox("Calcular E4", value=("E4" in ruta.secciones), key="activar_E4")
-        if activar_e4:
-            G0 = 77200.0 if E > 1000 else 11200.0
-            G = entrada_magnitud("Módulo de corte G", key="G_E4", magnitud="esfuerzo", unidad=uF, valor_inicial_interno=G0, min_interno=0.001)
-            Ix, Iy, J = prop.Ix, prop.Iy, prop.J
-            q1,q2,q3,q4 = st.columns(4)
-            q1.metric("Ix automático", f"{cvL(Ix,4):,.3f} {uI}")
-            q2.metric("Iy automático", f"{cvL(Iy,4):,.3f} {uI}")
-            q3.metric("J automático", f"{cvL(J,4):,.3f} {uI}")
-            if prop.Cw is None:
-                Cw = entrada_magnitud("Cw (requiere ingreso)", key="Cw_E4", magnitud="longitud", unidad=uL, potencia=6, valor_inicial_interno=0.0, min_interno=0.0)
+    # E4 no es opcional: se muestra únicamente cuando la ruta normativa incluye
+    # pandeo torsional (TB) o flexotorsional (FTB). Para perfiles tubulares, la
+    # Tabla E1.1 conduce a E3/E7 y este bloque permanece oculto.
+    aplica_e4 = any(estado in ruta.estados_limite for estado in ("TB", "FTB"))
+    st.session_state.pop("activar_E4", None)  # limpia la antigua casilla manual
+
+    if aplica_e4:
+        es_torsional = "TB" in ruta.estados_limite and "FTB" not in ruta.estados_limite
+        titulo_e4 = "E4 — Pandeo torsional" if es_torsional else "E4 — Pandeo flexotorsional"
+
+        with st.expander(titulo_e4, expanded=False):
+            st.info(
+                "Esta verificación fue activada automáticamente por la ruta del "
+                "Capítulo E; no puede omitirse mediante una casilla manual."
+            )
+
+            if res_x is None or res_y is None:
+                st.error("E4 requiere resultados válidos de E3. Revise las longitudes, factores K y radios de giro.")
             else:
-                Cw = prop.Cw
-                q4.metric("Cw automático", f"{cvL(Cw,6):,.3f} {uCw}")
-            q1,q2 = st.columns(2)
-            Lz = entrada_magnitud("Longitud torsional no arriostrada Lz", key="Lz_E4", magnitud="longitud", unidad=uL, valor_inicial_interno=max(Lx,Ly), min_interno=0.001)
-            Kz = q2.number_input("Factor Kz", min_value=0.001, value=1.0, key="Kz_E4")
-            Lcz = Kz*Lz
-            try:
-                if ruta.simetria == "Doble simetría":
-                    Fe4 = fe_torsional_doble_simetria(E=E,G=G,Cw=max(Cw,1e-12),J=J,Lcz=Lcz,Ix=Ix,Iy=Iy)
-                    modo="Pandeo torsional"
+                G0 = 77200.0 if E > 1000 else 11200.0
+                G = entrada_magnitud(
+                    "Módulo de corte G", key="G_E4", magnitud="esfuerzo", unidad=uF,
+                    valor_inicial_interno=G0, min_interno=0.001,
+                )
+                Ix, Iy, J = prop.Ix, prop.Iy, prop.J
+                q1, q2, q3, q4 = st.columns(4)
+                q1.metric("Ix automático", f"{cvL(Ix,4):,.3f} {uI}")
+                q2.metric("Iy automático", f"{cvL(Iy,4):,.3f} {uI}")
+                q3.metric("J automático", f"{cvL(J,4):,.3f} {uI}")
+
+                if prop.Cw is None:
+                    Cw = entrada_magnitud(
+                        "Cw (requiere ingreso)", key="Cw_E4", magnitud="longitud",
+                        unidad=uL, potencia=6, valor_inicial_interno=0.0, min_interno=0.0,
+                    )
+                    q4.metric("Cw ingresado", f"{cvL(Cw,6):,.3f} {uCw}")
                 else:
-                    q1,q2=st.columns(2)
-                    x0=entrada_magnitud("x0: centro de cortante respecto al centroide", key="x0_E4", magnitud="longitud", unidad=uL, valor_inicial_interno=0.0)
-                    y0=entrada_magnitud("y0: centro de cortante respecto al centroide", key="y0_E4", magnitud="longitud", unidad=uL, valor_inicial_interno=20.0)
-                    r0=radio_polar_centro_cortante(x0=x0,y0=y0,Ix=Ix,Iy=Iy,Ag=Ag)
-                    Hf=1-(x0*x0+y0*y0)/(r0*r0)
-                    # Para canal con eje x de simetría, la nota indica reemplazar Fey por Fex.
-                    Fes = res_x.Fe if perfil in {"Canal", "Tee"} else min(res_x.Fe,res_y.Fe)
-                    Fez=((3.141592653589793**2*E*Cw/Lcz**2)+G*J)/(Ag*r0**2)
-                    Fe4=fe_flexotorsional_monosimetrico(Fes=Fes,Fez=Fez,H=Hf)
-                    modo="Pandeo flexotorsional"
-                r4=pandeo_torsional_o_flexotorsional(modo=modo,Fe=Fe4,Fy=Fy,Ag=Ag)
-                q1,q2,q3=st.columns(3)
-                q1.metric("Fe E4",f"{cvF(r4.Fe):.3f} {uF}")
-                q2.metric("Fn",f"{cvF(r4.Fn):.3f} {uF}")
-                q3.metric("Pn",f"{cvP(r4.Pn):.3f} {uP}")
-                st.caption(f"Fn por {r4.ecuacion_fn}. Comparar Pn de E4 con Pn de E3 y adoptar el menor.")
-            except ValueError as exc:
-                st.error(str(exc))
+                    Cw = prop.Cw
+                    q4.metric("Cw automático", f"{cvL(Cw,6):,.3f} {uCw}")
+
+                q1, q2 = st.columns(2)
+                Lz = entrada_magnitud(
+                    "Longitud torsional no arriostrada Lz", key="Lz_E4",
+                    magnitud="longitud", unidad=uL,
+                    valor_inicial_interno=max(Lx, Ly), min_interno=0.001,
+                )
+                Kz = q2.number_input("Factor Kz", min_value=0.001, value=1.0, key="Kz_E4")
+                Lcz = Kz * Lz
+
+                try:
+                    if es_torsional:
+                        if Cw <= 0:
+                            raise ValueError(
+                                "Para aplicar E4 por pandeo torsional a esta sección abierta, "
+                                "Cw debe ser mayor que cero. Revise su cálculo o ingréselo manualmente."
+                            )
+                        Fe4 = fe_torsional_doble_simetria(
+                            E=E, G=G, Cw=Cw, J=J, Lcz=Lcz, Ix=Ix, Iy=Iy,
+                        )
+                        modo = "Pandeo torsional"
+
+                    elif ruta.simetria == "Monosimétrica":
+                        # E4-3 supone simetría respecto a y-y. Para canales, cuya
+                        # simetría es respecto a x-x, la nota de E4 ordena usar Fex.
+                        if perfil == "Canal":
+                            x0 = entrada_magnitud(
+                                "x0: centro de cortante respecto al centroide",
+                                key="x0_E4", magnitud="longitud", unidad=uL,
+                                valor_inicial_interno=20.0,
+                            )
+                            y0 = 0.0
+                            Fes = res_x.Fe
+                            st.caption("Canal: eje x-x de simetría; se usa Fex en E4-3.")
+                        else:
+                            x0 = 0.0
+                            y0 = entrada_magnitud(
+                                "y0: centro de cortante respecto al centroide",
+                                key="y0_E4", magnitud="longitud", unidad=uL,
+                                valor_inicial_interno=20.0,
+                            )
+                            Fes = res_y.Fe
+                            st.caption("Sección monosimétrica respecto a y-y; se usa Fey en E4-3.")
+
+                        r0 = radio_polar_centro_cortante(
+                            x0=x0, y0=y0, Ix=Ix, Iy=Iy, Ag=Ag,
+                        )
+                        Hf = 1.0 - (x0*x0 + y0*y0) / (r0*r0)
+                        Fez = ((3.141592653589793**2 * E * Cw / Lcz**2) + G*J) / (Ag*r0**2)
+                        Fe4 = fe_flexotorsional_monosimetrico(Fes=Fes, Fez=Fez, H=Hf)
+                        modo = "Pandeo flexotorsional"
+
+                    else:
+                        st.warning(
+                            "La sección es asimétrica. E4-4 requiere longitudes efectivas "
+                            "respecto a los ejes principales y las coordenadas del centro "
+                            "de cortante en esos ejes. Ingrese estos datos para continuar."
+                        )
+                        c1, c2, c3, c4 = st.columns(4)
+                        L1 = entrada_magnitud(
+                            "Longitud no arriostrada L1", key="L1_E4",
+                            magnitud="longitud", unidad=uL,
+                            valor_inicial_interno=Lx, min_interno=0.001,
+                        )
+                        K1 = c2.number_input("Factor K1", min_value=0.001, value=1.0, key="K1_E4")
+                        L2 = entrada_magnitud(
+                            "Longitud no arriostrada L2", key="L2_E4",
+                            magnitud="longitud", unidad=uL,
+                            valor_inicial_interno=Ly, min_interno=0.001,
+                        )
+                        K2 = c4.number_input("Factor K2", min_value=0.001, value=1.0, key="K2_E4")
+                        x0 = entrada_magnitud(
+                            "x0 respecto al eje principal 1", key="x0_asim_E4",
+                            magnitud="longitud", unidad=uL, valor_inicial_interno=0.0,
+                        )
+                        y0 = entrada_magnitud(
+                            "y0 respecto al eje principal 2", key="y0_asim_E4",
+                            magnitud="longitud", unidad=uL, valor_inicial_interno=0.0,
+                        )
+                        Lc1, Lc2 = K1*L1, K2*L2
+                        r0 = radio_polar_centro_cortante(
+                            x0=x0, y0=y0, Ix=prop.I1, Iy=prop.I2, Ag=Ag,
+                        )
+                        Fe1 = 3.141592653589793**2 * E / (Lc1/prop.r1)**2
+                        Fe2 = 3.141592653589793**2 * E / (Lc2/prop.r2)**2
+                        Fez = ((3.141592653589793**2 * E * Cw / Lcz**2) + G*J) / (Ag*r0**2)
+                        Fe4 = fe_flexotorsional_asimetrico(
+                            Fex=Fe1, Fey=Fe2, Fez=Fez, x0=x0, y0=y0, r0=r0,
+                        )
+                        modo = "Pandeo flexotorsional"
+
+                    r4 = pandeo_torsional_o_flexotorsional(
+                        modo=modo, Fe=Fe4, Fy=Fy, Ag=Ag,
+                    )
+                    q1, q2, q3 = st.columns(3)
+                    q1.metric("Fe E4", f"{cvF(r4.Fe):.3f} {uF}")
+                    q2.metric("Fn", f"{cvF(r4.Fn):.3f} {uF}")
+                    q3.metric("Pn", f"{cvP(r4.Pn):.3f} {uP}")
+                    st.caption(
+                        f"Fn por {r4.ecuacion_fn}. Comparar Pn de E4 con Pn de E3 "
+                        "y adoptar el menor."
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+    else:
+        # Borra estados de widgets E4 que pudieran quedar al cambiar desde un
+        # perfil para el cual sí era aplicable.
+        for clave in (
+            "Kz_E4", "K1_E4", "K2_E4",
+            "_base_G_E4", "_unit_G_E4", "_widget_G_E4",
+            "_base_Cw_E4", "_unit_Cw_E4", "_widget_Cw_E4",
+            "_base_Lz_E4", "_unit_Lz_E4", "_widget_Lz_E4",
+            "_base_x0_E4", "_unit_x0_E4", "_widget_x0_E4",
+            "_base_y0_E4", "_unit_y0_E4", "_widget_y0_E4",
+            "_base_L1_E4", "_unit_L1_E4", "_widget_L1_E4",
+            "_base_L2_E4", "_unit_L2_E4", "_widget_L2_E4",
+            "_base_x0_asim_E4", "_unit_x0_asim_E4", "_widget_x0_asim_E4",
+            "_base_y0_asim_E4", "_unit_y0_asim_E4", "_widget_y0_asim_E4",
+        ):
+            st.session_state.pop(clave, None)
 
     if "E5" in ruta.secciones:
         with st.expander("E5 — Miembros a compresión de ángulo simple", expanded=False):

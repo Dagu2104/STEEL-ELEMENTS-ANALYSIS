@@ -52,6 +52,12 @@ Se admite una sección I monosimétrica con patines superior e inferior de ancho
 
 La multiplicidad usada en E7 se determina automáticamente desde la geometría y no es editable.
 
-## Cambio de perfiles y estado de Streamlit
+## Aplicabilidad automática de E4
 
-Las entradas geométricas conservan su valor interno cuando se cambia de perfil o de unidad. Si Streamlit elimina temporalmente la clave visible de un widget al dejar de renderizarlo, la aplicación la reconstruye automáticamente al volver al perfil correspondiente, evitando errores `KeyError` en `st.session_state`.
+La aplicación determina E4 mediante los estados límite seleccionados por la ruta automática del Capítulo E:
+
+- `TB` muestra **E4 — Pandeo torsional**;
+- `FTB` muestra **E4 — Pandeo flexotorsional**;
+- si la ruta no contiene `TB` ni `FTB`, el bloque E4 no aparece.
+
+Por ello, E4 permanece oculto para tubos cuadrados, rectangulares y circulares. La verificación aplicable ya no puede activarse ni desactivarse mediante una casilla manual.
