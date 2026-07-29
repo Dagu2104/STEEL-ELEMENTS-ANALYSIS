@@ -406,40 +406,77 @@ def determinar_simetria_perfil(perfil: str, geo: dict, cubreplacas: dict) -> str
 
 
 def _entrada_cb(unidad_momento: str, prefijo: str) -> float:
-    """Permite ingresar Cb o calcularlo con F1-1."""
+    """Permite ingresar Cb o calcularlo con la ecuación F1-1."""
+    ayuda_cb = (
+        "Cb es el factor de modificación por gradiente de momentos para pandeo "
+        "lateral-torsional. Puede ingresarse directamente o calcularse mediante "
+        "F1-1 usando Mmax, MA, MB y MC del mismo segmento no arriostrado."
+    )
     modo = st.radio(
         "Obtención de Cb",
         ["Ingresar Cb", "Calcular con Mmax, MA, MB y MC"],
         horizontal=True,
         key=f"{prefijo}_modo_cb",
+        help=ayuda_cb,
     )
     if modo == "Ingresar Cb":
-        return st.number_input("Factor Cb", min_value=0.001, value=1.0, key=f"{prefijo}_Cb")
+        return st.number_input(
+            "Factor Cb", min_value=0.001, value=1.0, key=f"{prefijo}_Cb",
+            help=(
+                "Factor de modificación por gradiente de momentos del segmento no "
+                "arriostrado. Para momento uniforme, Cb = 1.0. Ingrese un valor "
+                "obtenido de un análisis compatible con AISC 360, Sección F1."
+            ),
+        )
 
-    st.caption("F1-1 usa valores absolutos de los momentos en los cuartos del tramo no arriostrado.")
+    st.caption(
+        "F1-1 usa los valores absolutos de los momentos en el mismo tramo no "
+        "arriostrado. MA, MB y MC corresponden a Lb/4, Lb/2 y 3Lb/4."
+    )
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         Mmax = entrada_magnitud(
             "Mmax", key=f"{prefijo}_Mmax", magnitud="momento", unidad=unidad_momento,
             valor_inicial_interno=100_000_000.0, min_interno=0.0,
+            help=(
+                "Valor absoluto del momento máximo dentro del segmento lateralmente "
+                "no arriostrado de longitud Lb. Use la misma combinación y diagrama "
+                "de momentos empleados para MA, MB y MC."
+            ),
         )
     with c2:
         MA = entrada_magnitud(
             "MA", key=f"{prefijo}_MA", magnitud="momento", unidad=unidad_momento,
             valor_inicial_interno=100_000_000.0, min_interno=0.0,
+            help=(
+                "Valor absoluto del momento en el punto situado a un cuarto del "
+                "segmento no arriostrado: x = Lb/4, medido desde uno de sus extremos."
+            ),
         )
     with c3:
         MB = entrada_magnitud(
             "MB", key=f"{prefijo}_MB", magnitud="momento", unidad=unidad_momento,
             valor_inicial_interno=100_000_000.0, min_interno=0.0,
+            help=(
+                "Valor absoluto del momento en el centro del segmento no "
+                "arriostrado: x = Lb/2."
+            ),
         )
     with c4:
         MC = entrada_magnitud(
             "MC", key=f"{prefijo}_MC", magnitud="momento", unidad=unidad_momento,
             valor_inicial_interno=100_000_000.0, min_interno=0.0,
+            help=(
+                "Valor absoluto del momento en el punto situado a tres cuartos del "
+                "segmento no arriostrado: x = 3Lb/4, medido desde el mismo extremo "
+                "utilizado para MA."
+            ),
         )
     cb = calcular_cb(Mmax, MA, MB, MC)
-    st.metric("Cb calculado — F1-1", f"{cb:.4f}")
+    st.metric(
+        "Cb calculado — F1-1", f"{cb:.4f}",
+        help="Resultado de Cb calculado con la ecuación F1-1 de AISC 360.",
+    )
     return cb
 
 
@@ -455,6 +492,7 @@ def mostrar_ruta_y_diseno_capitulo_f(
     )
     uL, uF, uP, uM = unidad_longitud, unidad_esfuerzo, unidad_fuerza, unidad_momento
     cvM = lambda v: valor_mostrado(v, "momento", uM)
+    cvF = lambda v: valor_mostrado(v, "esfuerzo", uF)
 
     with st.expander("Ruta automática del Capítulo F", expanded=True):
         c1, c2, c3 = st.columns(3)
@@ -488,6 +526,11 @@ def mostrar_ruta_y_diseno_capitulo_f(
                 Lb = entrada_magnitud(
                     "Longitud lateral no arriostrada Lb", key=f"{ruta.seccion}_Lb",
                     magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                    help=(
+                        "Distancia entre puntos que impiden el desplazamiento lateral "
+                        "del ala comprimida o que evitan el giro de la sección. Debe "
+                        "corresponder al mismo segmento usado para obtener Cb."
+                    ),
                 )
                 Cb = _entrada_cb(uM, ruta.seccion)
                 Cw = None
@@ -536,6 +579,11 @@ def mostrar_ruta_y_diseno_capitulo_f(
                     Lb = entrada_magnitud(
                         "Longitud lateral no arriostrada Lb", key="F7_Lb",
                         magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                        help=(
+                            "Distancia entre puntos que impiden el desplazamiento lateral "
+                            "de la región comprimida o que evitan el giro de la sección. "
+                            "Debe corresponder al mismo segmento usado para obtener Cb."
+                        ),
                     )
                     Cb = _entrada_cb(uM, "F7")
                 else:
@@ -553,6 +601,11 @@ def mostrar_ruta_y_diseno_capitulo_f(
                 Lb = entrada_magnitud(
                     "Longitud lateral no arriostrada Lb", key="F9_Lb",
                     magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                    help=(
+                        "Distancia entre puntos que impiden el desplazamiento lateral "
+                        "de la región comprimida o que evitan el giro de la sección. "
+                        "Debe corresponder al mismo segmento usado para obtener Cb."
+                    ),
                 )
                 resultado_f = calcular_f9(
                     perfil=perfil, E=E, Fy=Fy, prop=prop, geo=geo,
@@ -577,6 +630,11 @@ def mostrar_ruta_y_diseno_capitulo_f(
                     Lb = entrada_magnitud(
                         "Longitud lateral no arriostrada Lb", key="F10_Lb",
                         magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                        help=(
+                            "Distancia entre puntos que impiden el desplazamiento lateral "
+                            "de la región comprimida o que evitan el giro de la sección. "
+                            "Debe corresponder al mismo segmento usado para obtener Cb."
+                        ),
                     )
                     Cb = _entrada_cb(uM, "F10")
                 else:
@@ -705,13 +763,23 @@ def mostrar_ruta_y_diseno_capitulo_f(
 
             filas = []
             for estado in resultado_f.estados:
+                fcr_mostrado = "—" if estado.Fcr is None else round(cvF(estado.Fcr), 5)
+                observacion = estado.observacion
+                if estado.descripcion_Fcr:
+                    observacion = (observacion + " " + estado.descripcion_Fcr).strip()
                 filas.append({
                     "Estado límite": estado.estado,
                     "Ecuación": estado.ecuacion,
+                    f"Fcr [{uF}]": fcr_mostrado,
                     f"Mn [{uM}]": round(cvM(estado.Mn), 5),
-                    "Observación": estado.observacion,
+                    "Observación": observacion,
                 })
             st.dataframe(filas, use_container_width=True, hide_index=True)
+            st.caption(
+                "Cuando la ecuación de AISC calcula Mn directamente, el valor mostrado como "
+                "Fcr equivalente se obtiene de Mn/S únicamente para trazabilidad. Cuando la "
+                "ecuación define Fcr explícitamente, se muestra ese valor normativo."
+            )
 
             st.success(
                 f"Gobierna **{resultado_f.gobernante.estado}** ({resultado_f.gobernante.ecuacion})."

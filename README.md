@@ -92,3 +92,7 @@ a la unidad seleccionada por el usuario. Se adoptan `ϕb = 0.90` y `Ωb = 1.67`.
   entre rigidizadores se solicita cuando el alma es esbelta.
 - Los requisitos de detalle de cubreplacas y vigas armadas de F13.3/F13.4 dependen de
   soldaduras, pernos y distribución de carga, por lo que se muestran como advertencias.
+
+## Visualización de Fcr en flexión
+
+La tabla de resultados del Capítulo F incluye una columna `Fcr` en la unidad de esfuerzo seleccionada. Cuando la ecuación normativa define `Fcr` explícitamente, se muestra ese valor. Cuando la ecuación calcula `Mn` directamente, se muestra `Fcr equivalente = Mn/S` únicamente como trazabilidad y se identifica claramente en la observación.
