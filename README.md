@@ -61,3 +61,34 @@ La aplicación determina E4 mediante los estados límite seleccionados por la ru
 - si la ruta no contiene `TB` ni `FTB`, el bloque E4 no aparece.
 
 Por ello, E4 permanece oculto para tubos cuadrados, rectangulares y circulares. La verificación aplicable ya no puede activarse ni desactivarse mediante una casilla manual.
+
+## Flexión — Capítulo F
+
+La pestaña **Flexión** conserva la clasificación local de la Tabla B4.1b y añade:
+
+- selección automática de la ruta F2 a F12 mediante la Tabla User Note F1.1;
+- cálculo de `Cb` con F1-1 o ingreso directo;
+- resistencia nominal `Mn`, resistencia LRFD `ϕbMn` y resistencia ASD `Mn/Ωb`;
+- F2/F3 para perfiles I doblemente simétricos y canales compactos;
+- F4/F5 para perfiles I monosimétricos, con almas no compactas o esbeltas;
+- F6 para perfiles I y canales flexionados respecto al eje menor;
+- F7 para tubos cuadrados/rectangulares y cajones `Built-up`;
+- F8 para tubos circulares;
+- F9 para tees y ángulos dobles cargados en el plano de simetría;
+- F10 para ángulos simples con opciones de ejes geométricos o principales.
+
+Los cálculos internos utilizan `mm`, `MPa`, `N` y `N·mm`. Los momentos se convierten
+a la unidad seleccionada por el usuario. Se adoptan `ϕb = 0.90` y `Ωb = 1.67`.
+
+### Alcance actual de F11, F12 y F13
+
+- La interfaz no genera barras macizas, por lo que F11 queda preparado en el módulo,
+  pero no aparece como tipo de perfil seleccionable.
+- La interfaz no crea secciones completamente asimétricas personalizadas; F12 se
+  identifica como ruta de análisis cuando corresponde, pero no se calcula con
+  fórmulas cerradas.
+- F13.1 se verifica para agujeros en el ala de tensión y puede gobernar el momento nominal.
+- F13.2 verifica automáticamente las proporciones disponibles de perfiles I; la separación
+  entre rigidizadores se solicita cuando el alma es esbelta.
+- Los requisitos de detalle de cubreplacas y vigas armadas de F13.3/F13.4 dependen de
+  soldaduras, pernos y distribución de carga, por lo que se muestran como advertencias.

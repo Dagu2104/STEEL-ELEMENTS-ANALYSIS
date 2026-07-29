@@ -27,6 +27,23 @@ from capitulo_e import (
 from propiedades import calcular_propiedades, PropiedadesSeccion
 from unidades import a_interno, desde_interno, unidad_propiedad
 from flexion_b4 import evaluar_flexion_b4, clasificacion_global
+from capitulo_f import (
+    calcular_cb,
+    calcular_f2,
+    calcular_f3,
+    calcular_f4,
+    calcular_f5,
+    calcular_f6,
+    calcular_f7,
+    calcular_f8,
+    calcular_f9,
+    calcular_f10,
+    EstadoLimiteMomento,
+    agregar_estados,
+    ruta_capitulo_f,
+    verificar_agujeros_ala_tension,
+    verificaciones_proporcion_i_f13,
+)
 
 from funciones import (
     evaluar_angulo,
@@ -359,8 +376,355 @@ def mostrar_resultados_flexion(resultados):
         st.warning(mensaje)
     else:
         st.error(mensaje)
-    st.caption("Esta pestaña solo aplica la Tabla B4.1b. No calcula resistencia a flexión ni aplica el Capítulo F.")
+    st.caption("La clasificación B4.1b se utiliza a continuación para seleccionar automáticamente la sección aplicable del Capítulo F.")
 
+
+
+def determinar_simetria_perfil(perfil: str, geo: dict, cubreplacas: dict) -> str:
+    """Determina la simetría de la sección sin pedirla al usuario."""
+    if perfil in {"Perfil I", "Perfil I asimétrico"}:
+        sup = cubreplacas.get("superior")
+        inf = cubreplacas.get("inferior")
+        geometria_simetrica = perfil == "Perfil I" or (
+            abs(geo["bf_superior"] - geo["bf_inferior"]) < 1e-9
+            and abs(geo["tf_superior"] - geo["tf_inferior"]) < 1e-9
+        )
+        if geometria_simetrica and not sup and not inf:
+            return "Doble simetría"
+        if (
+            geometria_simetrica and sup and inf
+            and abs(float(sup["B"]) - float(inf["B"])) < 1e-9
+            and abs(float(sup["t"]) - float(inf["t"])) < 1e-9
+        ):
+            return "Doble simetría"
+        return "Monosimétrica"
+    if perfil in {"Canal", "Tee", "Ángulo doble con separadores"}:
+        return "Monosimétrica"
+    if perfil in {"Tubo cuadrado", "Tubo rectangular", "Tubo circular"}:
+        return "Doble simetría"
+    return "Asimétrica"
+
+
+def _entrada_cb(unidad_momento: str, prefijo: str) -> float:
+    """Permite ingresar Cb o calcularlo con F1-1."""
+    modo = st.radio(
+        "Obtención de Cb",
+        ["Ingresar Cb", "Calcular con Mmax, MA, MB y MC"],
+        horizontal=True,
+        key=f"{prefijo}_modo_cb",
+    )
+    if modo == "Ingresar Cb":
+        return st.number_input("Factor Cb", min_value=0.001, value=1.0, key=f"{prefijo}_Cb")
+
+    st.caption("F1-1 usa valores absolutos de los momentos en los cuartos del tramo no arriostrado.")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        Mmax = entrada_magnitud(
+            "Mmax", key=f"{prefijo}_Mmax", magnitud="momento", unidad=unidad_momento,
+            valor_inicial_interno=100_000_000.0, min_interno=0.0,
+        )
+    with c2:
+        MA = entrada_magnitud(
+            "MA", key=f"{prefijo}_MA", magnitud="momento", unidad=unidad_momento,
+            valor_inicial_interno=100_000_000.0, min_interno=0.0,
+        )
+    with c3:
+        MB = entrada_magnitud(
+            "MB", key=f"{prefijo}_MB", magnitud="momento", unidad=unidad_momento,
+            valor_inicial_interno=100_000_000.0, min_interno=0.0,
+        )
+    with c4:
+        MC = entrada_magnitud(
+            "MC", key=f"{prefijo}_MC", magnitud="momento", unidad=unidad_momento,
+            valor_inicial_interno=100_000_000.0, min_interno=0.0,
+        )
+    cb = calcular_cb(Mmax, MA, MB, MC)
+    st.metric("Cb calculado — F1-1", f"{cb:.4f}")
+    return cb
+
+
+def mostrar_ruta_y_diseno_capitulo_f(
+    perfil: str, resultados_b4, E: float, Fy: float, geo: dict, fabricacion: str | None,
+    cubreplacas: dict, prop, eje: str, lado_compresion: str,
+    unidad_esfuerzo: str, unidad_longitud: str, unidad_fuerza: str, unidad_momento: str,
+) -> None:
+    """Selecciona F2–F12 y calcula Mn para las secciones soportadas."""
+    simetria = determinar_simetria_perfil(perfil, geo, cubreplacas)
+    ruta = ruta_capitulo_f(
+        perfil=perfil, eje=eje, simetria=simetria, resultados_b4=resultados_b4,
+    )
+    uL, uF, uP, uM = unidad_longitud, unidad_esfuerzo, unidad_fuerza, unidad_momento
+    cvM = lambda v: valor_mostrado(v, "momento", uM)
+
+    with st.expander("Ruta automática del Capítulo F", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Sección aplicable", ruta.seccion)
+        c2.metric("Clasificación del patín", ruta.clasificacion_patin)
+        c3.metric("Clasificación del alma", ruta.clasificacion_alma)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Eje de flexión", ruta.eje)
+        c2.metric("Simetría", ruta.simetria)
+        c3.metric("Estados límite", " · ".join(ruta.estados_limite) if ruta.estados_limite else "—")
+        st.caption(ruta.explicacion)
+        st.code(
+            f"{perfil} → {ruta.simetria} → eje {eje} → "
+            f"patín {ruta.clasificacion_patin} / alma {ruta.clasificacion_alma} → {ruta.seccion}"
+        )
+        for advertencia in ruta.advertencias:
+            st.warning(advertencia)
+
+    if not ruta.aplicable:
+        st.error("La geometría y el eje seleccionados no tienen una ruta directa de cálculo implementable con la Tabla F1.1.")
+        return
+
+    with st.expander(f"{ruta.seccion} — Resistencia nominal a flexión", expanded=True):
+        st.info(
+            f"Los cálculos internos usan N·mm. Los resultados se muestran en **{uM}**. "
+            "Se reportan Mn, ϕbMn con ϕb=0.90 y Mn/Ωb con Ωb=1.67."
+        )
+        try:
+            resultado_f = None
+            if ruta.seccion in {"F2", "F3", "F4", "F5"}:
+                Lb = entrada_magnitud(
+                    "Longitud lateral no arriostrada Lb", key=f"{ruta.seccion}_Lb",
+                    magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                )
+                Cb = _entrada_cb(uM, ruta.seccion)
+                Cw = None
+                if ruta.seccion in {"F2", "F3"} and (prop.Cw is None or prop.Cw <= 0):
+                    Cw = entrada_magnitud(
+                        "Constante de alabeo Cw", key=f"{ruta.seccion}_Cw",
+                        magnitud="longitud", unidad=uL, potencia=6,
+                        valor_inicial_interno=1_000_000_000.0, min_interno=0.001,
+                        help="F2/F3 requieren Cw para calcular rts y Lr.",
+                    )
+                if ruta.seccion == "F2":
+                    resultado_f = calcular_f2(
+                        perfil=perfil, E=E, Fy=Fy, prop=prop, geo=geo, Lb=Lb, Cb=Cb,
+                        Cw=Cw, cubreplacas=cubreplacas,
+                    )
+                elif ruta.seccion == "F3":
+                    resultado_f = calcular_f3(
+                        E=E, Fy=Fy, prop=prop, geo=geo, Lb=Lb, Cb=Cb,
+                        resultados_b4=resultados_b4, Cw=Cw, cubreplacas=cubreplacas,
+                    )
+                elif ruta.seccion == "F4":
+                    resultado_f = calcular_f4(
+                        E=E, Fy=Fy, prop=prop, geo=geo, lado_compresion=lado_compresion,
+                        Lb=Lb, Cb=Cb, resultados_b4=resultados_b4, cubreplacas=cubreplacas,
+                    )
+                else:
+                    resultado_f = calcular_f5(
+                        E=E, Fy=Fy, prop=prop, geo=geo, lado_compresion=lado_compresion,
+                        Lb=Lb, Cb=Cb, resultados_b4=resultados_b4, cubreplacas=cubreplacas,
+                    )
+
+            elif ruta.seccion == "F6":
+                resultado_f = calcular_f6(
+                    E=E, Fy=Fy, prop=prop, lado_compresion=lado_compresion,
+                    resultados_b4=resultados_b4,
+                )
+
+            elif ruta.seccion == "F7":
+                es_cuadrada = abs(geo["B"] - geo["H"]) <= 1e-9
+                eje_mayor = "x-x" if prop.Ix >= prop.Iy else "y-y"
+                aplica_ltb = (not es_cuadrada) and eje == eje_mayor
+                Lb = None
+                Cb = 1.0
+                if aplica_ltb:
+                    st.caption("F7 verifica LTB porque la sección es rectangular y se flexiona sobre el eje mayor.")
+                    Lb = entrada_magnitud(
+                        "Longitud lateral no arriostrada Lb", key="F7_Lb",
+                        magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                    )
+                    Cb = _entrada_cb(uM, "F7")
+                else:
+                    st.caption("Según la nota de F7, LTB no aplica a secciones cuadradas ni a flexión sobre el eje menor.")
+                resultado_f = calcular_f7(
+                    E=E, Fy=Fy, prop=prop, geo=geo, fabricacion=fabricacion or "Rolled",
+                    eje=eje, lado_compresion=lado_compresion, resultados_b4=resultados_b4,
+                    Lb=Lb, Cb=Cb,
+                )
+
+            elif ruta.seccion == "F8":
+                resultado_f = calcular_f8(E=E, Fy=Fy, prop=prop, geo=geo, resultados_b4=resultados_b4)
+
+            elif ruta.seccion == "F9":
+                Lb = entrada_magnitud(
+                    "Longitud lateral no arriostrada Lb", key="F9_Lb",
+                    magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                )
+                resultado_f = calcular_f9(
+                    perfil=perfil, E=E, Fy=Fy, prop=prop, geo=geo,
+                    lado_compresion=lado_compresion, Lb=Lb, resultados_b4=resultados_b4,
+                )
+
+            elif ruta.seccion == "F10":
+                st.markdown("**Configuración específica del ángulo simple**")
+                modo_eje = st.selectbox(
+                    "Eje usado en F10", ["Geométrico", "Principal mayor", "Principal menor"],
+                    key="F10_modo_eje",
+                )
+                restriccion_continua = st.checkbox(
+                    "Restricción lateral-torsional continua", value=False, key="F10_restr_cont",
+                )
+                restriccion_solo_mmax = False
+                if not restriccion_continua:
+                    restriccion_solo_mmax = st.checkbox(
+                        "Restricción lateral-torsional únicamente en el punto de momento máximo",
+                        value=False, key="F10_restr_mmax",
+                    )
+                    Lb = entrada_magnitud(
+                        "Longitud lateral no arriostrada Lb", key="F10_Lb",
+                        magnitud="longitud", unidad=uL, valor_inicial_interno=3000.0, min_interno=0.001,
+                    )
+                    Cb = _entrada_cb(uM, "F10")
+                else:
+                    Lb, Cb = 1.0, 1.0
+                extremo_libre = st.radio(
+                    "Estado del extremo libre (toe)", ["Compresión", "Tracción"],
+                    horizontal=True, key="F10_toe",
+                )
+                pata_comprimida = st.radio(
+                    "Pata cuyo extremo libre se evalúa", ["Pata 1", "Pata 2"],
+                    horizontal=True, key="F10_pata",
+                )
+                beta_w = 0.0
+                if modo_eje == "Principal mayor" and abs(geo["b1"] - geo["b2"]) > 1e-9:
+                    beta_w = st.number_input(
+                        "Propiedad βw con signo", value=0.0, key="F10_beta_w",
+                        help="Use el signo correspondiente al extremo de la pata más larga en compresión o tracción.",
+                    )
+                resultado_f = calcular_f10(
+                    E=E, Fy=Fy, prop=prop, geo=geo, resultados_b4=resultados_b4,
+                    Lb=Lb, Cb=Cb, modo_eje=modo_eje, eje_geometrico=eje,
+                    lado_compresion=lado_compresion, restriccion_continua=restriccion_continua,
+                    restriccion_solo_mmax=restriccion_solo_mmax, extremo_libre=extremo_libre,
+                    pata_comprimida=pata_comprimida, beta_w=beta_w,
+                )
+
+            if resultado_f is None:
+                st.warning(f"La sección {ruta.seccion} todavía no tiene una geometría compatible en la interfaz.")
+                return
+
+            # F13 contiene disposiciones adicionales. Se automatizan las que
+            # dependen de datos geométricos disponibles y se solicitan únicamente
+            # los datos de agujeros/rigidizadores que no pueden inferirse.
+            estados_f13 = []
+            if eje == "x-x" and perfil in {"Perfil I", "Perfil I asimétrico", "Canal"}:
+                mostrar_f13 = st.checkbox(
+                    "Mostrar verificaciones adicionales de F13",
+                    value=False, key=f"mostrar_F13_{perfil}",
+                )
+                if mostrar_f13:
+                    st.markdown("### F13 — Provisiones adicionales")
+                    st.markdown("**F13.1 — Agujeros en el ala de tensión**")
+                    hay_agujeros = st.checkbox(
+                        "Existen agujeros para pernos en el ala de tensión",
+                        value=False, key=f"F13_agujeros_{perfil}",
+                    )
+                    if hay_agujeros:
+                        Fu = entrada_magnitud(
+                            "Esfuerzo último Fu", key=f"F13_Fu_{perfil}",
+                            magnitud="esfuerzo", unidad=uF,
+                            valor_inicial_interno=450.0, min_interno=0.001,
+                        )
+                        if perfil in {"Perfil I", "Perfil I asimétrico"}:
+                            if perfil == "Perfil I":
+                                bf_t, tf_t = geo["bf"], geo["tf"]
+                            elif lado_compresion == "Superior":
+                                bf_t, tf_t = geo["bf_inferior"], geo["tf_inferior"]
+                            else:
+                                bf_t, tf_t = geo["bf_superior"], geo["tf_superior"]
+                            clave_t = "inferior" if lado_compresion == "Superior" else "superior"
+                            q_t = cubreplacas.get(clave_t, {})
+                            Afg = bf_t * tf_t + float(q_t.get("B", q_t.get("b", 0.0))) * float(q_t.get("t", 0.0))
+                        else:
+                            Afg = (geo["b"] + geo["tw"]) * geo["tf"]
+                        st.metric("Área bruta del ala de tensión Afg", f"{valor_mostrado(Afg, 'longitud', uL, 2):,.4f} {unidad_propiedad(uL, 2)}")
+                        Afn = entrada_magnitud(
+                            "Área neta del ala de tensión Afn", key=f"F13_Afn_{perfil}",
+                            magnitud="longitud", unidad=uL, potencia=2,
+                            valor_inicial_interno=0.90 * Afg, min_interno=0.001, max_interno=Afg,
+                        )
+                        Sx_min = min(prop.Sx_sup, prop.Sx_inf)
+                        reduce, Mn13, Yt, explicacion13 = verificar_agujeros_ala_tension(
+                            Fu=Fu, Fy=Fy, Afg=Afg, Afn=Afn, Sx=Sx_min,
+                        )
+                        st.write(f"**Yt = {Yt:.2f}**. {explicacion13}")
+                        if reduce and Mn13 is not None:
+                            estados_f13.append(EstadoLimiteMomento(
+                                "F13 — Ruptura del ala de tensión", Mn13, "F13-1", explicacion13,
+                            ))
+                            st.warning(f"Momento nominal por F13-1: {cvM(Mn13):,.4f} {uM}.")
+                        else:
+                            st.success("La ruptura del ala de tensión no reduce la resistencia nominal.")
+
+                    if perfil in {"Perfil I", "Perfil I asimétrico"}:
+                        st.markdown("**F13.2 — Límites de proporción para perfiles I**")
+                        alma_esbelta = ruta.clasificacion_alma == "ESBELTO"
+                        a_rigid = None
+                        if alma_esbelta:
+                            tiene_rigidizadores = st.checkbox(
+                                "El alma posee rigidizadores transversales",
+                                value=False, key=f"F13_rigidizadores_{perfil}",
+                            )
+                            if tiene_rigidizadores:
+                                a_rigid = entrada_magnitud(
+                                    "Separación libre entre rigidizadores a",
+                                    key=f"F13_a_{perfil}", magnitud="longitud", unidad=uL,
+                                    valor_inicial_interno=1000.0, min_interno=0.001,
+                                )
+                        revisiones = verificaciones_proporcion_i_f13(
+                            E=E, Fy=Fy, prop=prop, geo=geo, cubreplacas=cubreplacas,
+                            lado_compresion=lado_compresion, simetria=simetria,
+                            alma_esbelta=alma_esbelta, separacion_rigidizadores_a=a_rigid,
+                        )
+                        if revisiones:
+                            filas_f13 = [{
+                                "Verificación": nombre,
+                                "Valor": round(valor, 5),
+                                "Límite": round(limite, 5),
+                                "Cumple": "SÍ" if cumple else "NO",
+                                "Referencia": ecuacion,
+                            } for nombre, valor, limite, cumple, ecuacion in revisiones]
+                            st.dataframe(filas_f13, use_container_width=True, hide_index=True)
+                            if any(not x[3] for x in revisiones):
+                                st.error("Existe al menos una proporción que no satisface F13.2.")
+                            else:
+                                st.success("Las proporciones verificadas satisfacen F13.2.")
+                        if cubreplacas:
+                            st.info(
+                                "F13.3 exige revisar el desarrollo, empalmes, separación longitudinal "
+                                "y terminación de las cubreplacas. Estas condiciones dependen del detalle "
+                                "de soldaduras o pernos y no se infieren solo con la sección transversal."
+                            )
+
+            if estados_f13:
+                resultado_f = agregar_estados(resultado_f, estados_f13)
+
+            filas = []
+            for estado in resultado_f.estados:
+                filas.append({
+                    "Estado límite": estado.estado,
+                    "Ecuación": estado.ecuacion,
+                    f"Mn [{uM}]": round(cvM(estado.Mn), 5),
+                    "Observación": estado.observacion,
+                })
+            st.dataframe(filas, use_container_width=True, hide_index=True)
+
+            st.success(
+                f"Gobierna **{resultado_f.gobernante.estado}** ({resultado_f.gobernante.ecuacion})."
+            )
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Momento nominal Mn", f"{cvM(resultado_f.Mn):,.4f} {uM}")
+            c2.metric("LRFD: ϕbMn", f"{cvM(resultado_f.phi_Mn):,.4f} {uM}")
+            c3.metric("ASD: Mn/Ωb", f"{cvM(resultado_f.Mn_sobre_omega):,.4f} {uM}")
+            for obs in resultado_f.observaciones:
+                st.caption(obs)
+
+        except (ValueError, ZeroDivisionError) as exc:
+            st.error(str(exc))
 
 
 def datos_fisicos_e7(perfil: str, elemento: str, geo: dict, cubreplacas: dict, fabricacion: str | None) -> tuple[float, float, int]:
@@ -989,6 +1353,11 @@ for tab, titulo in [
                 st.error(error_flexion)
             elif resultados_flexion:
                 mostrar_resultados_flexion(resultados_flexion)
+                mostrar_ruta_y_diseno_capitulo_f(
+                    perfil, resultados_flexion, E, Fy, geo, fabricacion,
+                    cubreplacas_grafico, propiedades, eje, lado_compresion,
+                    unidad_esfuerzo, unidad_longitud, unidad_fuerza, unidad_momento,
+                )
         else:
             st.info("Las propiedades geométricas ya se calculan automáticamente. Las ecuaciones de interacción se incorporarán en un módulo posterior.")
 
