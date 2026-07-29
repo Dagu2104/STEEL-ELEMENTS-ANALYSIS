@@ -57,18 +57,29 @@ def entrada_magnitud(label: str, *, key: str, magnitud: str, unidad: str,
     widget_key = f"_widget_{key}"
     if base_key not in st.session_state:
         st.session_state[base_key] = float(valor_inicial_interno)
-    if st.session_state.get(unit_key) != (unidad, potencia):
+
+    # Streamlit elimina del estado las claves de widgets que dejan de renderizarse.
+    # Esto ocurre, por ejemplo, al cambiar de Perfil I a otro perfil y regresar.
+    # Las claves auxiliares _base_* y _unit_* permanecen, por lo que no basta con
+    # comprobar únicamente si cambió la unidad: también hay que reconstruir la
+    # clave visible del widget cuando ya no existe.
+    unidad_cambio = st.session_state.get(unit_key) != (unidad, potencia)
+    widget_no_existe = widget_key not in st.session_state
+    if unidad_cambio or widget_no_existe:
         st.session_state[widget_key] = desde_interno(
             st.session_state[base_key], magnitud, unidad, potencia
         )
         st.session_state[unit_key] = (unidad, potencia)
+
     # Ajusta el valor visible si cambian límites dinámicos, por ejemplo b <= Bcp.
+    valor_widget = float(st.session_state[widget_key])
     if min_interno is not None:
         minimo_visible = desde_interno(min_interno, magnitud, unidad, potencia)
-        st.session_state[widget_key] = max(st.session_state[widget_key], minimo_visible)
+        valor_widget = max(valor_widget, minimo_visible)
     if max_interno is not None:
         maximo_visible = desde_interno(max_interno, magnitud, unidad, potencia)
-        st.session_state[widget_key] = min(st.session_state[widget_key], maximo_visible)
+        valor_widget = min(valor_widget, maximo_visible)
+    st.session_state[widget_key] = valor_widget
     kwargs = {"key": widget_key, "help": help}
     if min_interno is not None:
         kwargs["min_value"] = desde_interno(min_interno, magnitud, unidad, potencia)

@@ -51,3 +51,7 @@ La barra lateral permite seleccionar independientemente las unidades de longitud
 Se admite una sección I monosimétrica con patines superior e inferior de anchos y espesores diferentes. En compresión axial se evalúan ambos patines por separado y el alma mediante B4.1a. En flexión mayor se evalúa el patín comprimido y el alma mediante el caso 16 cuando corresponde; en flexión menor se evalúan ambos patines por separado.
 
 La multiplicidad usada en E7 se determina automáticamente desde la geometría y no es editable.
+
+## Cambio de perfiles y estado de Streamlit
+
+Las entradas geométricas conservan su valor interno cuando se cambia de perfil o de unidad. Si Streamlit elimina temporalmente la clave visible de un widget al dejar de renderizarlo, la aplicación la reconstruye automáticamente al volver al perfil correspondiente, evitando errores `KeyError` en `st.session_state`.
