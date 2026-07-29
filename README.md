@@ -108,17 +108,25 @@ La pestaña **Cortante**, ubicada después de Flexión, selecciona automáticame
 - G6 para cortante respecto al eje menor en perfiles I, canales, tees y configuraciones dobles soportadas;
 - G7 se muestra como advertencia cuando existen aberturas en el alma o en las paredes resistentes.
 
-Para G2, el programa siempre comienza con el alma sin rigidizadores transversales. Después puede:
+Para G2, el programa usa un flujo longitudinal desde la cara de la columna:
 
-- determinar si los rigidizadores son necesarios al comparar la resistencia disponible con el cortante requerido;
-- incorporar uno o dos rigidizadores interiores uniformemente distribuidos en una longitud definida desde el apoyo;
-- formar un panel extremo y, con dos rigidizadores, un panel interior;
-- verificar el panel interior con G2.2 cuando se desea aprovechar la acción de campo de tracción;
-- verificar esbeltez e inercia de los rigidizadores mediante G2-16 a G2-19.
+- el usuario ingresa el cortante máximo en la cara de la columna;
+- ingresa la distancia `Lz` hasta la sección donde desea que el perfil continúe sin rigidizadores;
+- ingresa el cortante existente en esa sección `Vu(Lz)` o `Va(Lz)`;
+- el perfil sin rigidizadores se verifica con el cortante al final de la zona;
+- todos los paneles y rigidizadores se diseñan conservadoramente con el máximo cortante de la zona;
+- el programa calcula la separación longitudinal máxima `amax` mediante G2.1 para el panel extremo;
+- calcula automáticamente el número mínimo de paneles y permite adoptar cualquier cantidad mayor;
+- distribuye los rigidizadores uniformemente y coloca el último en `x=Lz`;
+- muestra una tabla con la posición de cada rigidizador y los límites de cada panel;
+- verifica los paneles interiores con G2.2 cuando se activa la acción de campo de tracción;
+- verifica esbeltez e inercia de las placas mediante G2-16 a G2-19.
 
-G2.3 no se calcula. Los paneles extremos se revisan conservadoramente mediante G2.1. Para aprovechar la resistencia postpandeo del panel extremo se informa la necesidad de un análisis especializado, preferentemente mediante elementos finitos no lineales.
+G2.3 no se calcula. Por ello, `amax` se obtiene conservadoramente con G2.1 para el panel extremo. Cuando ni una separación muy pequeña permite que ese panel alcance la demanda, se informa que debe modificarse la sección o realizarse un análisis especializado.
 
-Los rigidizadores se evalúan por panel. La distancia `a` es la separación libre entre los elementos que delimitan el panel actual, no la longitud total de la zona rigidizada. El cortante requerido puede ingresarse individualmente para cada panel.
+La cantidad de paneles no suma resistencias. Cada panel debe resistir individualmente el mismo cortante máximo adoptado. La separación uniforme real es `a=Lz/n`, y debe cumplir `a≤amax`.
+
+El ancho saliente `bst` corresponde a cada placa rigidizadora y queda limitado automáticamente por la geometría del perfil: `(bf-tw)/2` para un perfil I simétrico, el menor espacio disponible de los dos patines para un perfil I asimétrico y el ancho saliente del patín para un canal. Los radios interiores y holguras de soldadura no se descuentan, por lo que el detalle final puede requerir un ancho menor.
 
 ## Comparación demanda/capacidad
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from math import ceil
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -52,6 +53,7 @@ from capitulo_g import (
     ResultadoCortante,
     calcular_g2_sin_rigidizadores,
     calcular_g2_panel,
+    calcular_separacion_maxima_g2,
     calcular_g3,
     calcular_g4,
     calcular_g5,
@@ -1208,22 +1210,27 @@ def mostrar_ruta_y_diseno_capitulo_g(
             "de servicio Va con Vn/Ωv."
         ),
     )
-    comparar = st.checkbox(
-        "Comparar con un cortante requerido",
-        value=False, key=f"G_comparar_{perfil}_{eje}",
-        help="Actívelo para obtener la relación demanda/capacidad y determinar si se requieren rigidizadores por resistencia.",
-    )
+
+    # Para G2 se usa el flujo longitudinal acordado: demanda máxima en la cara,
+    # longitud de la zona rigidizada y demanda al final de dicha zona. Las demás
+    # secciones del Capítulo G conservan la comparación general anterior.
     Vr_general = None
-    if comparar:
-        Vr_general = entrada_magnitud(
-            "Cortante requerido Vu" if metodo == "LRFD" else "Cortante requerido Va",
-            key=f"G_Vr_{perfil}_{eje}_{metodo}", magnitud="fuerza", unidad=uP,
-            valor_inicial_interno=100_000.0, min_interno=0.0,
-            help=(
-                "Cortante que actúa en la sección o panel evaluado. Use combinaciones "
-                "factorizadas para LRFD y combinaciones de servicio para ASD."
-            ),
+    if ruta.seccion != "G2":
+        comparar = st.checkbox(
+            "Comparar con un cortante requerido",
+            value=False, key=f"G_comparar_{perfil}_{eje}",
+            help="Actívelo para obtener la relación demanda/capacidad.",
         )
+        if comparar:
+            Vr_general = entrada_magnitud(
+                "Cortante requerido Vu" if metodo == "LRFD" else "Cortante requerido Va",
+                key=f"G_Vr_{perfil}_{eje}_{metodo}", magnitud="fuerza", unidad=uP,
+                valor_inicial_interno=100_000.0, min_interno=0.0,
+                help=(
+                    "Cortante que actúa en la sección evaluada. Use combinaciones "
+                    "factorizadas para LRFD y combinaciones de servicio para ASD."
+                ),
+            )
 
     tiene_aberturas = st.checkbox(
         "Existen aberturas en el alma o en las paredes resistentes",
@@ -1250,236 +1257,365 @@ def mostrar_ruta_y_diseno_capitulo_g(
             else:
                 d = h + 2.0 * geo["tf"]
 
-            st.subheader("G2.1 — Análisis base sin rigidizadores transversales")
+            st.subheader("Demanda de cortante a lo largo de la zona próxima a la columna")
+            st.caption(
+                "El perfil se verifica sin rigidizadores con el cortante existente al final de la "
+                "zona. Los paneles rigidizados y las placas se verifican conservadoramente con el "
+                "cortante máximo en la cara de la columna."
+            )
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                Vr_cara = entrada_magnitud(
+                    "Cortante máximo en la cara de la columna Vu,max" if metodo == "LRFD"
+                    else "Cortante máximo en la cara de la columna Va,max",
+                    key=f"G2_Vr_cara_{perfil}_{eje}_{metodo}", magnitud="fuerza", unidad=uP,
+                    valor_inicial_interno=300_000.0, min_interno=0.0,
+                    help=(
+                        "Máximo valor absoluto de la envolvente de cortante en la cara de la columna. "
+                        "Este valor se usa para dimensionar todos los paneles y rigidizadores de la zona."
+                    ),
+                )
+            with c2:
+                Lz = entrada_magnitud(
+                    "Distancia desde la cara hasta la sección sin rigidizadores",
+                    key=f"G2_Lz_transicion_{perfil}_{eje}", magnitud="longitud", unidad=uL,
+                    valor_inicial_interno=1000.0, min_interno=0.001,
+                    help=(
+                        "Distancia desde la cara de la columna hasta el último rigidizador. A partir de "
+                        "esta sección se pretende que el perfil continúe resistiendo sin rigidizadores."
+                    ),
+                )
+            with c3:
+                Vr_fin = entrada_magnitud(
+                    "Cortante en la sección ubicada a esa distancia Vu(Lz)" if metodo == "LRFD"
+                    else "Cortante en la sección ubicada a esa distancia Va(Lz)",
+                    key=f"G2_Vr_fin_{perfil}_{eje}_{metodo}", magnitud="fuerza", unidad=uP,
+                    valor_inicial_interno=200_000.0, min_interno=0.0,
+                    help=(
+                        "Cortante que actúa en la sección donde termina la zona rigidizada. Este valor "
+                        "debe ser resistido por el perfil sin ayuda de rigidizadores transversales."
+                    ),
+                )
+
+            Vr_zona = max(Vr_cara, Vr_fin)
+            if Vr_fin > Vr_cara + 1e-9:
+                st.warning(
+                    "El cortante ingresado al final de la zona es mayor que el de la cara. Para no "
+                    "subestimar la demanda, se adopta el mayor de ambos valores para los paneles y "
+                    "rigidizadores. Revise la envolvente si se esperaba un diagrama decreciente."
+                )
+
+            st.subheader("G2.1 — Perfil sin rigidizadores transversales")
             base = calcular_g2_sin_rigidizadores(
                 perfil=perfil, fabricacion=fabricacion, E=E, Fy=Fy,
                 h=h, tw=tw, d=d,
             )
             _mostrar_resultado_cortante(base, uP, uF)
-            if Vr_general is not None:
-                _comparar_cortante(base, metodo, Vr_general, uP, "Alma sin rigidizadores")
-
             disponible_base = capacidad_disponible(base.adoptado, metodo)
             Cv_base = 1.0 if base.adoptado.Cv is None else float(base.adoptado.Cv)
-            necesita, observaciones_necesidad = rigidizadores_requeridos_g24(
-                E=E, Fy=Fy, h=h, tw=tw,
-                resistencia_disponible_sin_rigidizadores=disponible_base,
-                cortante_requerido=Vr_general,
-                Cv_sin_rigidizadores=Cv_base,
+
+            _comparar_cortante(
+                base, metodo, Vr_fin, uP,
+                f"Perfil sin rigidizadores en x=Lz={cvL(Lz):,.3f} {uL}",
             )
-            for obs in observaciones_necesidad:
-                if necesita is True:
-                    st.warning(obs)
-                elif necesita is False:
-                    st.success(obs)
-                else:
-                    st.info(obs)
+            _comparar_cortante(
+                base, metodo, Vr_cara, uP,
+                "Cara de la columna sin rigidizadores",
+            )
 
-            falla_base = Vr_general is not None and Vr_general > disponible_base
+            cumple_fin = Vr_fin <= disponible_base + 1e-9
+            requiere_en_cara = Vr_zona > disponible_base + 1e-9
             pandeo_reduce = Cv_base < 1.0 - 1e-9
-            if falla_base and not pandeo_reduce:
-                st.error(
-                    "La sección no cumple a cortante y Cv=1.00, por lo que gobierna la fluencia "
-                    "del área resistente. Reducir la separación entre rigidizadores no puede aumentar "
-                    "0.6FyAw. Debe aumentar el área del alma, reforzarla para que participe en la "
-                    "resistencia o seleccionar una sección mayor."
-                )
-            elif falla_base and pandeo_reduce:
-                st.warning(
-                    "La sección no cumple y Cv<1.00: la resistencia está reducida por pandeo del alma. "
-                    "Los rigidizadores pueden aumentar kv y Cv; en paneles interiores también puede "
-                    "evaluarse la acción de campo de tracción de G2.2."
-                )
-            elif Vr_general is None:
-                st.info(
-                    "Active la comparación con un cortante requerido para determinar si los "
-                    "rigidizadores son necesarios por resistencia."
-                )
 
-            permitir_configuracion = Vr_general is not None and not (falla_base and not pandeo_reduce)
-            if permitir_configuracion:
-                etiqueta_rigidizadores = (
-                    "Incorporar y verificar rigidizadores transversales interiores"
-                    if necesita is True
-                    else "Verificar rigidizadores existentes de manera opcional"
+            if not cumple_fin:
+                st.error(
+                    "El perfil seleccionado no cumple sin rigidizadores en la distancia indicada. "
+                    "Para que la zona rigidizada termine allí, debe aumentar el área del alma, elegir "
+                    "otro perfil o desplazar el final de la zona hasta una sección con menor cortante."
                 )
-                agregar = st.checkbox(
-                    etiqueta_rigidizadores,
-                    value=False, key=f"G2_incorporar_rigidizadores_{perfil}",
-                    help=(
-                        "Los rigidizadores son placas perpendiculares al eje longitudinal de la viga. "
-                        "Dividen el alma en paneles. Cuando Cv<1 pueden aumentar la resistencia al "
-                        "pandeo; cuando Cv=1 no aumentan el límite de fluencia 0.6FyAw."
-                    ),
+            elif not requiere_en_cara:
+                st.success(
+                    "El perfil cumple tanto en la cara como al final de la zona sin rigidizadores; "
+                    "no se requieren rigidizadores transversales por resistencia a cortante."
+                )
+            elif not pandeo_reduce:
+                st.error(
+                    "La demanda máxima supera la capacidad, pero Cv=1.00. Los rigidizadores no pueden "
+                    "aumentar el límite 0.6FyAw; debe aumentar o reforzar el alma, o seleccionar una "
+                    "sección mayor."
                 )
             else:
-                st.session_state.pop(f"G2_incorporar_rigidizadores_{perfil}", None)
-                agregar = False
+                separacion = calcular_separacion_maxima_g2(
+                    perfil=perfil, fabricacion=fabricacion, E=E, Fy=Fy,
+                    h=h, tw=tw, d=d, cortante_requerido=Vr_zona, metodo=metodo,
+                )
+                for obs in separacion.observaciones:
+                    st.caption(obs)
 
-            if agregar:
-                st.markdown("### Configuración de la zona rigidizada")
-                numero = st.radio(
-                    "Número de rigidizadores interiores",
-                    [1, 2], horizontal=True, key=f"G2_num_rigidizadores_{perfil}",
-                    help=(
-                        "Un rigidizador interior forma un panel extremo entre el apoyo y ese rigidizador. "
-                        "Dos rigidizadores forman un panel extremo y un panel interior. La región situada "
-                        "después del último rigidizador no se incluye automáticamente en este cálculo."
-                    ),
-                )
-                Lz = entrada_magnitud(
-                    "Longitud de la zona rigidizada medida desde el apoyo",
-                    key=f"G2_Lz_{perfil}_{numero}", magnitud="longitud", unidad=uL,
-                    valor_inicial_interno=600.0, min_interno=0.001,
-                    help=(
-                        "Distancia desde el apoyo o poste extremo hasta el último rigidizador interior "
-                        "incluido. Los rigidizadores seleccionados se distribuyen uniformemente dentro "
-                        "de esta longitud. No corresponde a la longitud total de la viga."
-                    ),
-                )
-                a = Lz / numero
-                st.info(
-                    f"Separación libre adoptada por panel: a={cvL(a):,.3f} {uL}; "
-                    f"a/h={a/h:.3f}."
-                )
-                if numero == 1:
-                    st.code("Apoyo/poste extremo ┃── panel extremo ──┃ rigidizador interior")
+                if not separacion.es_posible or separacion.a_max is None:
+                    cap_max = separacion.capacidad_maxima_panel
+                    st.error(
+                        f"La máxima capacidad disponible del panel extremo dentro del alcance implementado "
+                        f"es {cvP(cap_max):,.4f} {uP}, menor que la demanda adoptada de "
+                        f"{cvP(Vr_zona):,.4f} {uP}. No existe una separación que resuelva este caso con "
+                        "G2.1; debe modificarse la sección o estudiarse G2.3 mediante análisis especializado."
+                    )
                 else:
-                    st.code(
-                        "Apoyo/poste extremo ┃── panel extremo ──┃ rigidizador 1 "
-                        "┃── panel interior ──┃ rigidizador 2"
+                    a_max = separacion.a_max
+                    n_min = max(1, ceil(Lz / a_max - 1e-12))
+
+                    st.markdown("### Separación longitudinal y cantidad de rigidizadores")
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Separación máxima amax", f"{cvL(a_max):,.4f} {uL}")
+                    m2.metric("amax/h", f"{a_max/h:.4f}")
+                    m3.metric("Paneles mínimos", str(n_min))
+                    m4.metric("Rigidizadores mínimos", str(n_min))
+                    st.info(
+                        "El último rigidizador se coloca en x=Lz. Como la cara de la columna es el límite "
+                        "inicial, el número de paneles coincide con el número de rigidizadores ubicados "
+                        "dentro de la zona."
                     )
 
-                Afc, Aft, bfc, bft = _datos_patines_g2(
-                    perfil, geo, cubreplacas, lado_compresion,
-                )
-                paneles = []
-                demandas_panel = []
-                for i in range(numero):
-                    tipo = "Extremo" if i == 0 else "Interior"
-                    st.markdown(f"#### Panel {i+1} — {tipo}")
+                    key_n = f"G2_num_paneles_{perfil}_{eje}_{metodo}"
+                    max_paneles = max(200, n_min + 100)
+                    if key_n not in st.session_state:
+                        st.session_state[key_n] = n_min
+                    else:
+                        st.session_state[key_n] = min(
+                            max(int(st.session_state[key_n]), n_min), max_paneles
+                        )
+                    numero_paneles = int(st.number_input(
+                        "Número de paneles adoptado en la zona rigidizada",
+                        min_value=n_min,
+                        max_value=max_paneles,
+                        step=1,
+                        key=key_n,
+                        help=(
+                            "Puede adoptar más paneles que el mínimo. El programa distribuye los "
+                            "rigidizadores uniformemente y mantiene el último en x=Lz."
+                        ),
+                    ))
+                    a = Lz / numero_paneles
+                    cumple_separacion = a <= a_max * (1.0 + 1e-9)
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Separación uniforme adoptada a", f"{cvL(a):,.4f} {uL}")
+                    c2.metric("a/h", f"{a/h:.4f}")
+                    c3.metric("Comprobación a≤amax", "CUMPLE" if cumple_separacion else "NO CUMPLE")
+
+                    if numero_paneles <= 8:
+                        esquema = "Cara de columna ┃"
+                        for i in range(1, numero_paneles + 1):
+                            esquema += f"── Panel {i} ──┃ R{i} "
+                        esquema += f"→ zona sin rigidizadores desde x={cvL(Lz):,.3f} {uL}"
+                        st.code(esquema)
+                    else:
+                        st.code(
+                            f"Cara de columna ┃── {numero_paneles} paneles uniformes de "
+                            f"{cvL(a):,.3f} {uL} ──┃ R{numero_paneles} en x=Lz"
+                        )
+
+                    filas_posicion = []
+                    for i in range(numero_paneles):
+                        x_ini = i * a
+                        x_fin = (i + 1) * a
+                        filas_posicion.append({
+                            "Panel": i + 1,
+                            "Tipo": "Extremo" if i == 0 else "Interior",
+                            f"Inicio [{uL}]": round(cvL(x_ini), 4),
+                            f"Fin [{uL}]": round(cvL(x_fin), 4),
+                            "Rigidizador al final": f"R{i+1}",
+                            f"Posición del rigidizador [{uL}]": round(cvL(x_fin), 4),
+                        })
+                    st.dataframe(filas_posicion, use_container_width=True, hide_index=True)
+
+                    Afc, Aft, bfc, bft = _datos_patines_g2(
+                        perfil, geo, cubreplacas, lado_compresion,
+                    )
                     usar_tfa = False
-                    if tipo == "Interior":
+                    if numero_paneles > 1:
                         usar_tfa = st.checkbox(
-                            "Aprovechar acción de campo de tracción G2.2",
-                            value=True, key=f"G2_TFA_{perfil}_{i}",
+                            "Aprovechar acción de campo de tracción G2.2 en todos los paneles interiores",
+                            value=True,
+                            key=f"G2_TFA_uniforme_{perfil}_{eje}",
                             disabled=(a / h > 3.0),
                             help=(
-                                "G2.2 solo corresponde a paneles interiores delimitados por rigidizadores "
-                                "y requiere a/h≤3. Si se desactiva, el panel se verifica únicamente mediante G2.1."
+                                "La opción solo afecta a los paneles interiores. El primer panel se "
+                                "mantiene conservadoramente con G2.1 porque G2.3 no está implementado."
                             ),
                         )
                         if a / h > 3.0:
-                            st.warning("a/h>3.0; la acción de campo de tracción de G2.2 no es aplicable.")
-                    else:
-                        st.warning(
-                            "G2.3 no se calcula. El panel extremo se verifica conservadoramente mediante G2.1. "
-                            "Para aprovechar su resistencia postpandeo se requiere un análisis especializado, "
-                            "preferentemente con elementos finitos no lineales que representen alma, patines, "
-                            "poste extremo, rigidizadores, imperfecciones y no linealidad geométrica/material."
-                        )
+                            st.warning("a/h>3.0; G2.2 no es aplicable.")
 
-                    panel = calcular_g2_panel(
-                        perfil=perfil, fabricacion=fabricacion, tipo_panel=tipo,
+                    panel_extremo = calcular_g2_panel(
+                        perfil=perfil, fabricacion=fabricacion, tipo_panel="Extremo",
                         E=E, Fy=Fy, h=h, tw=tw, d=d, a=a,
                         Afc=Afc, Aft=Aft, bfc=bfc, bft=bft,
-                        usar_campo_traccion=usar_tfa,
+                        usar_campo_traccion=False,
                     )
-                    paneles.append(panel)
-                    estados_panel = [panel.g21]
-                    if panel.g22 is not None:
-                        estados_panel.append(panel.g22)
-                    resultado_panel = ResultadoCortante(
-                        f"G2 — panel {i+1}", tuple(estados_panel), panel.adoptado,
-                        panel.observaciones,
+                    estados_ext = [panel_extremo.g21]
+                    resultado_extremo = ResultadoCortante(
+                        "G2 — panel extremo", tuple(estados_ext), panel_extremo.adoptado,
+                        panel_extremo.observaciones,
                     )
-                    _mostrar_resultado_cortante(resultado_panel, uP, uF)
+                    st.markdown("### Verificación del panel extremo representativo")
+                    _mostrar_resultado_cortante(resultado_extremo, uP, uF)
+                    _comparar_cortante(resultado_extremo, metodo, Vr_zona, uP, "Panel 1 — extremo")
+                    st.warning(
+                        "G2.3 no se calcula. El panel extremo se verifica conservadoramente mediante G2.1."
+                    )
 
-                    Vr_p = entrada_magnitud(
-                        "Cortante requerido del panel Vu" if metodo == "LRFD" else "Cortante requerido del panel Va",
-                        key=f"G2_Vr_panel_{perfil}_{i}_{metodo}", magnitud="fuerza", unidad=uP,
-                        valor_inicial_interno=Vr_general if Vr_general is not None else 100_000.0,
-                        min_interno=0.0,
+                    panel_interior = None
+                    resultado_interior = None
+                    if numero_paneles > 1:
+                        panel_interior = calcular_g2_panel(
+                            perfil=perfil, fabricacion=fabricacion, tipo_panel="Interior",
+                            E=E, Fy=Fy, h=h, tw=tw, d=d, a=a,
+                            Afc=Afc, Aft=Aft, bfc=bfc, bft=bft,
+                            usar_campo_traccion=usar_tfa,
+                        )
+                        estados_int = [panel_interior.g21]
+                        if panel_interior.g22 is not None:
+                            estados_int.append(panel_interior.g22)
+                        resultado_interior = ResultadoCortante(
+                            "G2 — panel interior", tuple(estados_int), panel_interior.adoptado,
+                            panel_interior.observaciones,
+                        )
+                        st.markdown("### Verificación del panel interior representativo")
+                        _mostrar_resultado_cortante(resultado_interior, uP, uF)
+                        _comparar_cortante(
+                            resultado_interior, metodo, Vr_zona, uP,
+                            f"Paneles 2 a {numero_paneles} — interiores",
+                        )
+
+                    filas_paneles = []
+                    for i in range(numero_paneles):
+                        panel = panel_extremo if i == 0 else panel_interior
+                        disponible = capacidad_disponible(panel.adoptado, metodo)
+                        dc = Vr_zona / disponible if disponible > 0 else float("inf")
+                        filas_paneles.append({
+                            "Panel": i + 1,
+                            "Tipo": "Extremo" if i == 0 else "Interior",
+                            f"a [{uL}]": round(cvL(a), 4),
+                            "a/h": round(a / h, 4),
+                            "kv": None if panel.adoptado.kv is None else round(panel.adoptado.kv, 4),
+                            "Cv": None if panel.adoptado.Cv is None else round(panel.adoptado.Cv, 4),
+                            f"Demanda [{uP}]": round(cvP(Vr_zona), 4),
+                            f"Capacidad [{uP}]": round(cvP(disponible), 4),
+                            "D/C": round(dc, 4),
+                            "Estado": "CUMPLE" if dc <= 1.0 + 1e-9 else "NO CUMPLE",
+                        })
+                    st.dataframe(filas_paneles, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "La misma demanda máxima se aplica a todos los paneles. Las capacidades no se "
+                        "suman; cada panel debe cumplir de manera individual."
+                    )
+
+                    st.markdown("### G2.4 — Dimensionamiento y verificación de los rigidizadores")
+                    st.caption(
+                        f"Todos los rigidizadores se verifican con la demanda máxima adoptada de "
+                        f"{cvP(Vr_zona):,.4f} {uP}."
+                    )
+                    mismo_acero = st.checkbox(
+                        "Usar el mismo Fy del perfil para los rigidizadores",
+                        value=True, key=f"G24_mismo_acero_{perfil}",
                         help=(
-                            "Demanda de cortante correspondiente específicamente a este panel. El cortante "
-                            "puede disminuir al alejarse del apoyo, por lo que no se obliga a usar el mismo "
-                            "valor en todos los paneles."
+                            "Fyst es el esfuerzo mínimo de fluencia del acero del rigidizador transversal. "
+                            "Puede diferir del acero del alma."
                         ),
                     )
-                    demandas_panel.append(Vr_p)
-                    _comparar_cortante(resultado_panel, metodo, Vr_p, uP, f"Panel {i+1}")
-
-                st.markdown("### G2.4 — Verificación de los rigidizadores suministrados")
-                mismo_acero = st.checkbox(
-                    "Usar el mismo Fy del perfil para los rigidizadores",
-                    value=True, key=f"G24_mismo_acero_{perfil}",
-                    help=(
-                        "Fyst es el esfuerzo mínimo de fluencia del acero del rigidizador transversal. "
-                        "Puede diferir del acero del alma."
-                    ),
-                )
-                Fyst = Fy if mismo_acero else entrada_magnitud(
-                    "Esfuerzo de fluencia del rigidizador Fyst",
-                    key=f"G24_Fyst_{perfil}", magnitud="esfuerzo", unidad=uF,
-                    valor_inicial_interno=250.0, min_interno=0.001,
-                    help="Esfuerzo mínimo de fluencia especificado para la placa del rigidizador transversal.",
-                )
-                numero_placas = st.radio(
-                    "Placas por rigidizador",
-                    [1, 2], horizontal=True, key=f"G24_num_placas_{perfil}",
-                    help=(
-                        "Una placa se coloca a un solo lado del alma y su inercia se calcula respecto a la "
-                        "cara en contacto con el alma. Dos placas forman un par, una a cada lado, y la inercia "
-                        "se calcula respecto al plano medio del alma."
-                    ),
-                )
-                c1, c2 = st.columns(2)
-                with c1:
-                    b_st = entrada_magnitud(
-                        "Ancho saliente del rigidizador bst", key=f"G24_bst_{perfil}",
-                        magnitud="longitud", unidad=uL, valor_inicial_interno=80.0, min_interno=0.001,
-                        help="Distancia desde la cara del alma hasta el borde libre de la placa rigidizadora.",
+                    Fyst = Fy if mismo_acero else entrada_magnitud(
+                        "Esfuerzo de fluencia del rigidizador Fyst",
+                        key=f"G24_Fyst_{perfil}", magnitud="esfuerzo", unidad=uF,
+                        valor_inicial_interno=250.0, min_interno=0.001,
+                        help="Esfuerzo mínimo de fluencia especificado para la placa del rigidizador.",
                     )
-                with c2:
-                    t_st = entrada_magnitud(
-                        "Espesor del rigidizador tst", key=f"G24_tst_{perfil}",
-                        magnitud="longitud", unidad=uL, valor_inicial_interno=8.0, min_interno=0.001,
-                        help="Espesor de la placa transversal utilizada como rigidizador.",
+                    numero_placas = st.radio(
+                        "Placas por rigidizador",
+                        [1, 2], horizontal=True, key=f"G24_num_placas_{perfil}",
+                        help=(
+                            "Una placa se coloca a un lado del alma. Dos placas forman un par, una a cada "
+                            "lado. bst corresponde al ancho saliente de cada placa."
+                        ),
                     )
 
-                filas_st = []
-                for i, panel in enumerate(paneles):
-                    Vr_p = demandas_panel[i]
-                    Vc1 = capacidad_disponible(panel.adoptado, metodo)
-                    Vc2_nom = panel.Vn_Cv2
-                    Vc2 = 0.90 * Vc2_nom if metodo == "LRFD" else Vc2_nom / 1.67
-                    ver = verificar_rigidizador_g24(
-                        E=E, Fyw=Fy, Fyst=Fyst, h=h, tw=tw, a=a,
-                        b_st=b_st, t_st=t_st, numero_placas=numero_placas,
-                        Vr=Vr_p, Vc1=Vc1, Vc2=Vc2,
+                    if perfil == "Perfil I":
+                        b_st_max = max((geo["bf"] - tw) / 2.0, 0.0)
+                        descripcion_bmax = "(bf−tw)/2"
+                    elif perfil == "Perfil I asimétrico":
+                        b_sup = (geo["bf_superior"] - tw) / 2.0
+                        b_inf = (geo["bf_inferior"] - tw) / 2.0
+                        b_st_max = max(min(b_sup, b_inf), 0.0)
+                        descripcion_bmax = "mínimo espacio disponible entre ambos patines"
+                    else:
+                        b_st_max = max(geo["b"], 0.0)
+                        descripcion_bmax = "ancho saliente del patín del canal"
+                    if b_st_max <= 0:
+                        raise ValueError("La geometría no deja espacio disponible para el rigidizador.")
+
+                    st.metric(
+                        "Ancho saliente geométrico máximo bst,max",
+                        f"{cvL(b_st_max):,.4f} {uL}",
                     )
-                    filas_st.append({
-                        "Panel adyacente": f"Panel {i+1} — {panel.tipo_panel}",
-                        "bst/tst": round(ver.lambda_st, 4),
-                        "Límite G2-16": round(ver.lambda_limite, 4),
-                        "Esbeltez": "Cumple" if ver.cumple_esbeltez else "No cumple",
-                        f"Ist prov. [{unidad_propiedad(uL,4)}]": round(cvL(ver.Ist_proporcionado, 4), 4),
-                        f"Ist req. [{unidad_propiedad(uL,4)}]": round(cvL(ver.Ist_requerido, 4), 4),
-                        "Inercia": "Cumple" if ver.cumple_inercia else "No cumple",
-                        "ρw": round(ver.rho_w, 4),
-                    })
-                    if ver.demanda_supera_panel:
-                        st.error(
-                            f"Panel {i+1}: la demanda supera la resistencia disponible del panel. "
-                            "Aumentar solo el rigidizador no resuelve la insuficiencia."
+                    st.caption(
+                        f"Límite geométrico usado: {descripcion_bmax}. El programa no descuenta radios "
+                        "interiores ni holguras de soldadura; el detalle final puede requerir un bst menor."
+                    )
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        b_st = entrada_magnitud(
+                            "Ancho saliente de cada placa bst",
+                            key=f"G24_bst_{perfil}", magnitud="longitud", unidad=uL,
+                            valor_inicial_interno=min(80.0, 0.80 * b_st_max),
+                            min_interno=0.001, max_interno=b_st_max,
+                            help=(
+                                "Distancia desde la cara del alma hasta el borde libre de cada placa. "
+                                "Está limitada automáticamente por la geometría de los patines."
+                            ),
                         )
-                    for obs in ver.observaciones:
-                        st.caption(f"Panel {i+1}: {obs}")
-                st.dataframe(filas_st, use_container_width=True, hide_index=True)
-                st.caption(
-                    "La verificación usa la máxima exigencia de los paneles modelados. Si existe otro panel "
-                    "al lado opuesto del último rigidizador, también debe verificarse y puede gobernar."
-                )
+                    with c2:
+                        t_st = entrada_magnitud(
+                            "Espesor de cada placa tst",
+                            key=f"G24_tst_{perfil}", magnitud="longitud", unidad=uL,
+                            valor_inicial_interno=8.0, min_interno=0.001,
+                            help="Espesor de la placa transversal utilizada como rigidizador.",
+                        )
+
+                    paneles_representativos = [("Panel extremo", panel_extremo)]
+                    if panel_interior is not None:
+                        paneles_representativos.append(("Panel interior", panel_interior))
+
+                    filas_st = []
+                    for nombre_panel, panel in paneles_representativos:
+                        Vc1 = capacidad_disponible(panel.adoptado, metodo)
+                        Vc2_nom = panel.Vn_Cv2
+                        Vc2 = 0.90 * Vc2_nom if metodo == "LRFD" else Vc2_nom / 1.67
+                        ver = verificar_rigidizador_g24(
+                            E=E, Fyw=Fy, Fyst=Fyst, h=h, tw=tw, a=a,
+                            b_st=b_st, t_st=t_st, numero_placas=numero_placas,
+                            Vr=Vr_zona, Vc1=Vc1, Vc2=Vc2,
+                        )
+                        filas_st.append({
+                            "Panel de control": nombre_panel,
+                            "bst/tst": round(ver.lambda_st, 4),
+                            "Límite G2-16": round(ver.lambda_limite, 4),
+                            "Esbeltez": "Cumple" if ver.cumple_esbeltez else "No cumple",
+                            f"Ist prov. [{unidad_propiedad(uL,4)}]": round(cvL(ver.Ist_proporcionado, 4), 4),
+                            f"Ist req. [{unidad_propiedad(uL,4)}]": round(cvL(ver.Ist_requerido, 4), 4),
+                            "Inercia": "Cumple" if ver.cumple_inercia else "No cumple",
+                            "ρw": round(ver.rho_w, 4),
+                        })
+                        if ver.demanda_supera_panel:
+                            st.error(
+                                f"{nombre_panel}: la demanda supera la capacidad del panel. Aumentar "
+                                "únicamente las dimensiones del rigidizador no resuelve la insuficiencia."
+                            )
+                        for obs in ver.observaciones:
+                            st.caption(f"{nombre_panel}: {obs}")
+                    st.dataframe(filas_st, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "Las dimensiones bst y tst corresponden a la placa transversal. Las posiciones "
+                        "longitudinales R1, R2, … se muestran en la tabla de distribución anterior."
+                    )
 
         elif ruta.seccion == "G3":
             if perfil == "Tee":
@@ -1577,6 +1713,7 @@ def mostrar_ruta_y_diseno_capitulo_g(
 
     except (ValueError, ZeroDivisionError) as exc:
         st.error(str(exc))
+
 
 def datos_fisicos_e7(perfil: str, elemento: str, geo: dict, cubreplacas: dict, fabricacion: str | None) -> tuple[float, float, int]:
     """Devuelve b, t y multiplicidad física automática para E7."""

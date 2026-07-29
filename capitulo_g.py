@@ -110,6 +110,18 @@ class ResultadoRigidizadorG24:
     observaciones: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ResultadoSeparacionG2:
+    requiere_rigidizadores: bool
+    es_posible: bool
+    a_max: float | None
+    estado_a_max: EstadoCortante | None
+    estado_limite: EstadoCortante
+    capacidad_sin_rigidizadores: float
+    capacidad_maxima_panel: float
+    observaciones: tuple[str, ...] = ()
+
+
 def _positivo(nombre: str, valor: float) -> None:
     if valor <= 0:
         raise ValueError(f"{nombre} debe ser mayor que cero.")
@@ -372,6 +384,117 @@ def calcular_g2_panel(
     return ResultadoPanelG2(
         tipo_panel, a, a / h, g21, g22, adoptado, Cv2, Vn_Cv2,
         tuple(observaciones),
+    )
+
+
+def calcular_separacion_maxima_g2(
+    *, perfil: str, fabricacion: str | None, E: float, Fy: float,
+    h: float, tw: float, d: float, cortante_requerido: float,
+    metodo: str, tolerancia_relativa: float = 1e-8, iteraciones: int = 100,
+) -> ResultadoSeparacionG2:
+    """Calcula la mayor separación ``a`` que permite cumplir G2.1.
+
+    El cálculo se realiza de manera conservadora para el panel extremo, sin
+    aprovechar la resistencia postpandeo de G2.3. Por ello, el valor obtenido
+    también puede emplearse como separación uniforme para los paneles de la
+    zona próxima al apoyo.
+
+    La búsqueda queda limitada a ``a/h <= 3``. Para ``a/h > 3`` la expresión
+    de G2-5 deja de incrementar ``k_v`` y se adopta ``k_v = 5.34``.
+    """
+    for nombre, valor in {
+        "E": E, "Fy": Fy, "h": h, "tw": tw, "d": d,
+        "cortante requerido": cortante_requerido,
+    }.items():
+        _positivo(nombre, valor)
+    if metodo not in {"LRFD", "ASD"}:
+        raise ValueError("El método debe ser LRFD o ASD.")
+    if tolerancia_relativa <= 0:
+        raise ValueError("La tolerancia relativa debe ser mayor que cero.")
+    if iteraciones < 10:
+        raise ValueError("Se requieren al menos 10 iteraciones para la búsqueda.")
+
+    estado_base = _estado_g21(
+        perfil=perfil, fabricacion=fabricacion, E=E, Fy=Fy,
+        h=h, tw=tw, d=d, a=None,
+    )
+    capacidad_base = capacidad_disponible(estado_base, metodo)
+
+    # Se aproxima a a -> 0 para obtener el máximo de G2.1, que corresponde
+    # a Cv=1.0 cuando la geometría y el material permiten alcanzarlo.
+    a_min = max(h * 1e-7, 1e-7)
+    estado_limite = _estado_g21(
+        perfil=perfil, fabricacion=fabricacion, E=E, Fy=Fy,
+        h=h, tw=tw, d=d, a=a_min,
+    )
+    capacidad_maxima = capacidad_disponible(estado_limite, metodo)
+
+    if cortante_requerido <= capacidad_base * (1.0 + tolerancia_relativa):
+        return ResultadoSeparacionG2(
+            requiere_rigidizadores=False, es_posible=True, a_max=None,
+            estado_a_max=None, estado_limite=estado_limite,
+            capacidad_sin_rigidizadores=capacidad_base,
+            capacidad_maxima_panel=capacidad_maxima,
+            observaciones=(
+                "La resistencia sin rigidizadores ya es suficiente para la demanda ingresada.",
+            ),
+        )
+
+    if cortante_requerido > capacidad_maxima * (1.0 + tolerancia_relativa):
+        return ResultadoSeparacionG2(
+            requiere_rigidizadores=True, es_posible=False, a_max=None,
+            estado_a_max=None, estado_limite=estado_limite,
+            capacidad_sin_rigidizadores=capacidad_base,
+            capacidad_maxima_panel=capacidad_maxima,
+            observaciones=(
+                "Ni llevando Cv a 1.00 mediante una separación muy pequeña el panel extremo "
+                "alcanza la demanda. Debe aumentarse o reforzarse el alma, seleccionarse otra "
+                "sección o estudiarse G2.3 mediante un análisis especializado.",
+            ),
+        )
+
+    a_superior = 3.0 * h
+    estado_superior = _estado_g21(
+        perfil=perfil, fabricacion=fabricacion, E=E, Fy=Fy,
+        h=h, tw=tw, d=d, a=a_superior,
+    )
+    capacidad_superior = capacidad_disponible(estado_superior, metodo)
+
+    if capacidad_superior >= cortante_requerido:
+        a_max = a_superior
+        estado_a_max = estado_superior
+    else:
+        # En el intervalo (0, 3h] la capacidad disminuye al aumentar a.
+        inferior = a_min       # cumple
+        superior = a_superior  # no cumple
+        estado_a_max = estado_limite
+        for _ in range(iteraciones):
+            medio = 0.5 * (inferior + superior)
+            estado_medio = _estado_g21(
+                perfil=perfil, fabricacion=fabricacion, E=E, Fy=Fy,
+                h=h, tw=tw, d=d, a=medio,
+            )
+            capacidad_medio = capacidad_disponible(estado_medio, metodo)
+            if capacidad_medio >= cortante_requerido:
+                inferior = medio
+                estado_a_max = estado_medio
+            else:
+                superior = medio
+            if (superior - inferior) / max(h, 1.0) <= tolerancia_relativa:
+                break
+        a_max = inferior
+
+    return ResultadoSeparacionG2(
+        requiere_rigidizadores=True, es_posible=True, a_max=a_max,
+        estado_a_max=estado_a_max, estado_limite=estado_limite,
+        capacidad_sin_rigidizadores=capacidad_base,
+        capacidad_maxima_panel=capacidad_maxima,
+        observaciones=(
+            "a_max se obtuvo con G2.1 para el panel extremo, sin aprovechar G2.3; "
+            "la separación adoptada debe ser menor o igual que este valor.",
+            "La cantidad de paneles no suma resistencias: cada panel se verifica con el "
+            "cortante máximo adoptado para la zona.",
+        ),
     )
 
 
