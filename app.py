@@ -986,7 +986,18 @@ def mostrar_ruta_y_diseno_capitulo_f(
 
             filas = []
             for estado in resultado_f.estados:
-                fcr_mostrado = "—" if estado.Fcr is None else round(cvF(estado.Fcr), 5)
+                if estado.Fcr is not None:
+                    fcr_mostrado = round(cvF(estado.Fcr), 5)
+                else:
+                    detalle_fcr = estado.descripcion_Fcr.lower()
+                    if "mcr" in detalle_fcr:
+                        fcr_mostrado = "Usa Mcr"
+                    elif "no aplica" in detalle_fcr:
+                        fcr_mostrado = "No aplica"
+                    elif "no define fcr" in detalle_fcr:
+                        fcr_mostrado = "No definido"
+                    else:
+                        fcr_mostrado = "—"
                 observacion = estado.observacion
                 if estado.descripcion_Fcr:
                     observacion = (observacion + " " + estado.descripcion_Fcr).strip()
@@ -999,9 +1010,10 @@ def mostrar_ruta_y_diseno_capitulo_f(
                 })
             st.dataframe(filas, use_container_width=True, hide_index=True)
             st.caption(
-                "Cuando la ecuación de AISC calcula Mn directamente, el valor mostrado como "
-                "Fcr equivalente se obtiene de Mn/S únicamente para trazabilidad. Cuando la "
-                "ecuación define Fcr explícitamente, se muestra ese valor normativo."
+                "Fcr se muestra únicamente cuando la ecuación normativa lo define de forma "
+                "explícita. Si AISC calcula Mn directamente, la tabla indica «No definido»; "
+                "si el estado límite no aplica, indica «No aplica». Mcr es un momento crítico "
+                "y se reporta en la observación, no como Fcr."
             )
 
             st.success(

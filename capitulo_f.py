@@ -421,22 +421,21 @@ def calcular_f2(
     descripcion_fcr = ""
     if Lb <= Lp:
         Mn_ltb, eq, obs = Mp, "F2-2(a)", f"Lb={Lb:.3f} ≤ Lp={Lp:.3f}; LTB no aplica."
+        descripcion_fcr = "LTB no aplica en este intervalo; la norma no define Fcr."
     elif Lb <= Lr:
         Mn_ltb = Cb * (Mp - (Mp - 0.7 * Fy * Sx) * (Lb - Lp) / (Lr - Lp))
         Mn_ltb = min(Mn_ltb, Mp)
-        Fcr_ltb = Mn_ltb / Sx
-        descripcion_fcr = "Fcr equivalente = Mn/Sx; F2-2 calcula Mn directamente."
+        descripcion_fcr = "F2-2 calcula Mn directamente; la norma no define Fcr en este intervalo."
         eq, obs = (
             "F2-2",
-            f"Lp={Lp:.3f} < Lb={Lb:.3f} ≤ Lr={Lr:.3f}; "
-            f"Fcr equivalente=Mn/Sx={Fcr_ltb:.3f} MPa.",
+            f"Lp={Lp:.3f} < Lb={Lb:.3f} ≤ Lr={Lr:.3f}; Mn se calcula directamente con F2-2.",
         )
     else:
         Fcr_ltb = Cb * pi**2 * E / (Lb / rts) ** 2 * sqrt(
             1.0 + 0.078 * termino * (Lb / rts) ** 2
         )
         Mn_ltb = min(Fcr_ltb * Sx, Mp)
-        descripcion_fcr = "Fcr calculado con F2-4."
+        descripcion_fcr = "Fcr normativo calculado con F2-4."
         eq, obs = "F2-3 / F2-4", f"Lb={Lb:.3f} > Lr={Lr:.3f}; Fcr={Fcr_ltb:.3f} MPa."
     estados.append(EstadoLimiteMomento(
         "LTB — Pandeo lateral-torsional", Mn_ltb, eq, obs,
@@ -470,8 +469,15 @@ def calcular_f3(
         Mn_flb, eq = Mp, "F3 — patín compacto"
     estados = [
         next(e for e in base.estados if e.estado.startswith("LTB")),
-        EstadoLimiteMomento("FLB — Pandeo local del patín comprimido", min(Mn_flb, Mp), eq,
-                            f"λ={lam:.3f}; λp={lp:.3f}; λr={lr:.3f}."),
+        EstadoLimiteMomento(
+            "FLB — Pandeo local del patín comprimido", min(Mn_flb, Mp), eq,
+            f"λ={lam:.3f}; λp={lp:.3f}; λr={lr:.3f}.",
+            descripcion_Fcr=(
+                "El pandeo local no aplica porque el patín es compacto; Fcr no se define."
+                if patin.clasificacion == "COMPACTO"
+                else f"{eq} calcula Mn directamente; la norma no define Fcr."
+            ),
+        ),
     ]
     return _resolver("F3", estados, *base.observaciones)
 
@@ -526,18 +532,18 @@ def calcular_f4(
     if Lb <= Lp:
         Mn_ltb, eq_ltb = Mn_cfy, "F4-2(a)"
         regimen_ltb = f"Lb={Lb:.3f} ≤ Lp={Lp:.3f}; LTB no reduce la resistencia."
+        descripcion_fcr = "LTB no aplica en este intervalo; la norma no define Fcr."
     elif Lb <= Lr:
         Mn_ltb = Cb * (Mn_cfy - (Mn_cfy - FL * Sxc) * (Lb - Lp) / (Lr - Lp))
         Mn_ltb, eq_ltb = min(Mn_ltb, Mn_cfy), "F4-2"
-        Fcr_ltb = Mn_ltb / Sxc
-        descripcion_fcr = "Fcr equivalente = Mn/Sxc; F4-2 calcula Mn directamente."
+        descripcion_fcr = "F4-2 calcula Mn directamente; la norma no define Fcr en este intervalo."
         regimen_ltb = f"Lp={Lp:.3f} < Lb={Lb:.3f} ≤ Lr={Lr:.3f}."
     else:
         Fcr_ltb = Cb * pi**2 * E / (Lb / rt) ** 2 * sqrt(
             1.0 + 0.078 * termino * (Lb / rt) ** 2
         )
         Mn_ltb, eq_ltb = min(Fcr_ltb * Sxc, Mn_cfy), "F4-3 / F4-5"
-        descripcion_fcr = "Fcr calculado con F4-5."
+        descripcion_fcr = "Fcr normativo calculado con F4-5."
         regimen_ltb = f"Lb={Lb:.3f} > Lr={Lr:.3f}."
     estados.append(EstadoLimiteMomento(
         "LTB — Pandeo lateral-torsional", Mn_ltb, eq_ltb,
@@ -555,8 +561,15 @@ def calcular_f4(
     else:
         kc = max(0.35, min(0.76, 4.0 / sqrt(geo["h"] / geo["tw"])))
         Mn_flb, eq_flb = 0.9 * E * kc * Sxc / lam**2, "F4-14"
-    estados.append(EstadoLimiteMomento("FLB — Pandeo local del patín comprimido", Mn_flb, eq_flb,
-                                       f"λ={lam:.3f}; λp={lp:.3f}; λr={lr:.3f}."))
+    estados.append(EstadoLimiteMomento(
+        "FLB — Pandeo local del patín comprimido", Mn_flb, eq_flb,
+        f"λ={lam:.3f}; λp={lp:.3f}; λr={lr:.3f}.",
+        descripcion_Fcr=(
+            "El pandeo local no aplica porque el patín es compacto; Fcr no se define."
+            if flange.clasificacion == "COMPACTO"
+            else f"{eq_flb} calcula Mn directamente; la norma no define Fcr."
+        ),
+    ))
 
     if Sxt < Sxc:
         Rpt = _rpc_rpt(Mp=Mp, My=Myt, web=web, relacion_iyc=relacion_iyc)
@@ -588,35 +601,51 @@ def calcular_f5(
 
     Lp = 1.1 * rt * sqrt(E / Fy)
     Lr = pi * rt * sqrt(E / (0.7 * Fy))
+    Fcr_ltb = None
     if Lb <= Lp:
-        Fcr, eq = Fy, "F5-3(a)"
+        Mn_ltb = Mn_cfy
+        eq = "F5-3(a)"
+        obs_ltb = f"Lb={Lb:.3f} ≤ Lp={Lp:.3f}; LTB no aplica."
+        descripcion_fcr = "LTB no aplica en este intervalo; la norma no define Fcr."
     elif Lb <= Lr:
-        Fcr = Cb * (Fy - 0.3 * Fy * (Lb - Lp) / (Lr - Lp))
-        Fcr, eq = min(Fcr, Fy), "F5-3"
+        Fcr_ltb = min(Cb * (Fy - 0.3 * Fy * (Lb - Lp) / (Lr - Lp)), Fy)
+        eq = "F5-3"
+        Mn_ltb = Rpg * Fcr_ltb * Sxc
+        obs_ltb = f"Lp={Lp:.3f} < Lb={Lb:.3f} ≤ Lr={Lr:.3f}; Fcr={Fcr_ltb:.3f} MPa."
+        descripcion_fcr = "Fcr normativo calculado con F5-3."
     else:
-        Fcr = min(Cb * pi**2 * E / (Lb / rt) ** 2, Fy)
+        Fcr_ltb = min(Cb * pi**2 * E / (Lb / rt) ** 2, Fy)
         eq = "F5-4"
-    Mn_ltb = Rpg * Fcr * Sxc
+        Mn_ltb = Rpg * Fcr_ltb * Sxc
+        obs_ltb = f"Lb={Lb:.3f} > Lr={Lr:.3f}; Fcr={Fcr_ltb:.3f} MPa."
+        descripcion_fcr = "Fcr normativo calculado con F5-4."
     estados.append(EstadoLimiteMomento(
         "LTB — Pandeo lateral-torsional", Mn_ltb, "F5-2 / " + eq,
-        f"Lp={Lp:.3f}; Lr={Lr:.3f}; rt={rt:.3f}; Fcr={Fcr:.3f} MPa.",
-        Fcr=Fcr, descripcion_Fcr=f"Fcr calculado con {eq}.",
+        f"{obs_ltb} Lp={Lp:.3f}; Lr={Lr:.3f}; rt={rt:.3f}.",
+        Fcr=Fcr_ltb, descripcion_Fcr=descripcion_fcr,
     ))
 
     lam, lp, lr = flange.lambda_real, flange.lambda_p, flange.lambda_r
+    Fcr_flb = None
     if flange.clasificacion == "COMPACTO":
-        Fcr_flb, eq_flb = Fy, "F5-7(a)"
+        Mn_flb, eq_flb = Mn_cfy, "F5-7(a)"
+        obs_flb = f"λ={lam:.3f}; patín compacto; FLB no aplica."
+        descripcion_fcr_flb = "El pandeo local no aplica; la norma no define Fcr."
     elif flange.clasificacion == "NO COMPACTO":
         Fcr_flb = Fy - 0.3 * Fy * (lam - lp) / (lr - lp)
         eq_flb = "F5-8"
+        Mn_flb = Rpg * Fcr_flb * Sxc
+        obs_flb = f"Fcr={Fcr_flb:.3f} MPa; λ={lam:.3f}."
+        descripcion_fcr_flb = "Fcr normativo calculado con F5-8."
     else:
         kc = max(0.35, min(0.76, 4.0 / sqrt(geo["h"] / geo["tw"])))
         Fcr_flb, eq_flb = 0.9 * E * kc / lam**2, "F5-9"
-    Mn_flb = Rpg * Fcr_flb * Sxc
+        Mn_flb = Rpg * Fcr_flb * Sxc
+        obs_flb = f"Fcr={Fcr_flb:.3f} MPa; λ={lam:.3f}."
+        descripcion_fcr_flb = "Fcr normativo calculado con F5-9."
     estados.append(EstadoLimiteMomento(
         "FLB — Pandeo local del patín comprimido", Mn_flb, "F5-7 / " + eq_flb,
-        f"Fcr={Fcr_flb:.3f} MPa; λ={lam:.3f}.",
-        Fcr=Fcr_flb, descripcion_Fcr=f"Fcr calculado con {eq_flb}.",
+        obs_flb, Fcr=Fcr_flb, descripcion_Fcr=descripcion_fcr_flb,
     ))
     if Sxt < Sxc:
         estados.append(EstadoLimiteMomento("TFY — Fluencia del patín traccionado", Fy * Sxt, "F5-10"))
@@ -636,21 +665,20 @@ def calcular_f6(
     Fcr_flb = None
     if flange.clasificacion == "COMPACTO":
         Mn_flb, eq = Mp, "F6-2(a)"
+        descripcion_fcr = "El pandeo local no aplica porque el patín es compacto; Fcr no se define."
     elif flange.clasificacion == "NO COMPACTO":
         Mn_flb = Mp - (Mp - 0.7 * Fy * Sy) * (lam - lp) / (lr - lp)
         eq = "F6-2"
-        Fcr_flb = min(Mn_flb, Mp) / Sy
+        descripcion_fcr = "F6-2 calcula Mn directamente; la norma no define Fcr."
     else:
         Fcr_flb = 0.69 * E / lam**2
         Mn_flb, eq = Fcr_flb * Sy, "F6-3 / F6-4"
+        descripcion_fcr = "Fcr normativo calculado con F6-4."
     estados.append(EstadoLimiteMomento(
         "FLB — Pandeo local del patín", min(Mn_flb, Mp), eq,
         f"λ={lam:.3f}; λp={lp:.3f}; λr={lr:.3f}."
         + (f" Fcr={Fcr_flb:.3f} MPa." if Fcr_flb is not None else ""),
-        Fcr=Fcr_flb,
-        descripcion_Fcr=("Fcr calculado con F6-4." if flange.clasificacion == "ESBELTO"
-                         else "Fcr equivalente = Mn/Sy; F6-2 calcula Mn directamente."
-                         if flange.clasificacion == "NO COMPACTO" else ""),
+        Fcr=Fcr_flb, descripcion_Fcr=descripcion_fcr,
     ))
     return _resolver("F6", estados)
 
@@ -727,8 +755,15 @@ def calcular_f7(
             lado_compresion=lado_compresion, be=be,
         )
         Mn_flb, eq_flb = Fy * Se, "F7-3 / " + ("F7-4" if fabricacion == "Rolled" else "F7-5")
-    estados.append(EstadoLimiteMomento("FLB — Pandeo local del patín", Mn_flb, eq_flb,
-                                       f"λ={lam:.3f}; λp={lp:.3f}; λr={lr:.3f}."))
+    estados.append(EstadoLimiteMomento(
+        "FLB — Pandeo local del patín", Mn_flb, eq_flb,
+        f"λ={lam:.3f}; λp={lp:.3f}; λr={lr:.3f}.",
+        descripcion_Fcr=(
+            "El pandeo local no aplica porque el patín es compacto; Fcr no se define."
+            if flange.clasificacion == "COMPACTO"
+            else f"{eq_flb} calcula Mn directamente; la norma no define Fcr."
+        ),
+    ))
 
     lamw, lpw, lrw = web.lambda_real, web.lambda_p, web.lambda_r
     if web.clasificacion == "ESBELTO" and fabricacion == "Rolled":
@@ -750,8 +785,15 @@ def calcular_f7(
         Rpg = 1.0 - aw / (1200.0 + 300.0 * aw) * (lamw - 5.7 * sqrt(E / Fy))
         Rpg = min(1.0, max(0.0, Rpg))
         Mn_wlb, eq_wlb = Rpg * Fy * S, "F7-7 / F5-6"
-    estados.append(EstadoLimiteMomento("WLB — Pandeo local del alma", Mn_wlb, eq_wlb,
-                                       f"λw={lamw:.3f}; λpw={lpw:.3f}; λrw={lrw:.3f}."))
+    estados.append(EstadoLimiteMomento(
+        "WLB — Pandeo local del alma", Mn_wlb, eq_wlb,
+        f"λw={lamw:.3f}; λpw={lpw:.3f}; λrw={lrw:.3f}.",
+        descripcion_Fcr=(
+            "El pandeo local no aplica porque el alma es compacta; Fcr no se define."
+            if web.clasificacion == "COMPACTO"
+            else f"{eq_wlb} calcula Mn directamente; la norma no define Fcr."
+        ),
+    ))
 
     es_cuadrada = abs(geo["B"] - geo["H"]) <= 1e-9
     eje_mayor = "x-x" if prop.Ix >= prop.Iy else "y-y"
@@ -763,30 +805,24 @@ def calcular_f7(
         _positivo("Cb", Cb)
         Lp = 0.13 * E * r_lateral * sqrt(prop.J * prop.Ag) / Mp
         Lr = 2.0 * E * r_lateral * sqrt(prop.J * prop.Ag) / (0.7 * Fy * S)
-        Fcr_ltb = None
-        descripcion_fcr = ""
         if Lb <= Lp:
             Mn_ltb, eq = Mp, "F7-8(a)"
             obs_ltb = f"Lb={Lb:.3f} ≤ Lp={Lp:.3f}; LTB no reduce Mn."
+            descripcion_fcr = "LTB no aplica en este intervalo; la norma no define Fcr."
         elif Lb <= Lr:
             Mn_ltb = Cb * (Mp - (Mp - 0.7 * Fy * S) * (Lb - Lp) / (Lr - Lp))
             Mn_ltb, eq = min(Mn_ltb, Mp), "F7-8"
-            Fcr_ltb = Mn_ltb / S
-            descripcion_fcr = "Fcr equivalente = Mn/S; F7-8 calcula Mn directamente."
-            obs_ltb = (
-                f"Lp={Lp:.3f} < Lb={Lb:.3f} ≤ Lr={Lr:.3f}; "
-                f"Fcr equivalente=Mn/S={Fcr_ltb:.3f} MPa."
-            )
+            obs_ltb = f"Lp={Lp:.3f} < Lb={Lb:.3f} ≤ Lr={Lr:.3f}; Mn se calcula directamente con F7-8."
+            descripcion_fcr = "F7-8 calcula Mn directamente; la norma no define Fcr."
         else:
-            Fcr_ltb = 2.0 * E * Cb * sqrt(prop.J * prop.Ag) / (Lb / r_lateral) / S
-            Mn_ltb = min(Fcr_ltb * S, Mp)
+            Mn_ltb = min(2.0 * E * Cb * sqrt(prop.J * prop.Ag) / (Lb / r_lateral), Mp)
             eq = "F7-9"
-            descripcion_fcr = "Fcr equivalente obtenido al expresar F7-9 como Mn=Fcr·S."
-            obs_ltb = f"Lb={Lb:.3f} > Lr={Lr:.3f}; Fcr={Fcr_ltb:.3f} MPa."
+            obs_ltb = f"Lb={Lb:.3f} > Lr={Lr:.3f}; Mn se calcula directamente con F7-9."
+            descripcion_fcr = "F7-9 calcula Mn directamente; la norma no define Fcr."
         estados.append(EstadoLimiteMomento(
             "LTB — Pandeo lateral-torsional", Mn_ltb, eq,
             f"{obs_ltb} Lp={Lp:.3f}; Lr={Lr:.3f}.",
-            Fcr=Fcr_ltb, descripcion_Fcr=descripcion_fcr,
+            Fcr=None, descripcion_Fcr=descripcion_fcr,
         ))
         obs = "LTB evaluado porque la sección es rectangular y se flexiona sobre su eje mayor."
     else:
@@ -804,18 +840,17 @@ def calcular_f8(*, E: float, Fy: float, prop, geo: dict, resultados_b4: Iterable
     Mp = Fy * prop.Zx
     estados = [EstadoLimiteMomento("Y — Fluencia", Mp, "F8-1")]
     Fcr_lb = None
-    descripcion_fcr = ""
     if pared.clasificacion == "COMPACTO":
         Mn_lb, eq = Mp, "F8-2(a)"
+        descripcion_fcr = "El pandeo local no aplica porque la pared es compacta; Fcr no se define."
     elif pared.clasificacion == "NO COMPACTO":
         Mn_lb = (0.021 * E / lam + Fy) * S
         Mn_lb, eq = min(Mn_lb, Mp), "F8-2"
-        Fcr_lb = Mn_lb / S
-        descripcion_fcr = "Fcr equivalente = Mn/S; F8-2 calcula Mn directamente."
+        descripcion_fcr = "F8-2 calcula Mn directamente; la norma no define Fcr."
     else:
         Fcr_lb = 0.33 * E / lam
         Mn_lb, eq = Fcr_lb * S, "F8-3 / F8-4"
-        descripcion_fcr = "Fcr calculado con F8-4."
+        descripcion_fcr = "Fcr normativo calculado con F8-4."
     estados.append(EstadoLimiteMomento(
         "LB — Pandeo local", Mn_lb, eq,
         f"D/t={lam:.3f}; clasificación={pared.clasificacion}."
@@ -836,15 +871,21 @@ def _curva_f10_ltb(My: float, Mcr: float) -> tuple[float, str]:
     return Mn, "F10-3"
 
 
-def _local_pata_angulo(*, E: float, Fy: float, Sc: float, resultado_pata) -> tuple[float, str]:
+def _local_pata_angulo(
+    *, E: float, Fy: float, Sc: float, resultado_pata,
+) -> tuple[float, str, float | None, str]:
+    """Devuelve Mn, ecuación, Fcr normativo (si existe) y su descripción."""
     lam = resultado_pata.lambda_real
     if resultado_pata.clasificacion == "COMPACTO":
-        return float("inf"), "F10-6(a)"
+        return (
+            float("inf"), "F10-6(a)", None,
+            "El pandeo local no aplica porque la pata es compacta; Fcr no se define.",
+        )
     if resultado_pata.clasificacion == "NO COMPACTO":
         Mn = Fy * Sc * (2.43 - 1.72 * lam * sqrt(Fy / E))
-        return Mn, "F10-6"
+        return Mn, "F10-6", None, "F10-6 calcula Mn directamente; la norma no define Fcr."
     Fcr = 0.71 * E / lam**2
-    return Fcr * Sc, "F10-7 / F10-8"
+    return Fcr * Sc, "F10-7 / F10-8", Fcr, "Fcr normativo calculado con F10-8."
 
 
 def calcular_f9(
@@ -895,8 +936,11 @@ def calcular_f9(
             eq_ltb = "F9-6"
         else:
             Mn_ltb, eq_ltb = Mcr, "F9-7 / F9-10 / F9-11"
-    estados.append(EstadoLimiteMomento("LTB — Pandeo lateral-torsional", Mn_ltb, eq_ltb,
-                                       f"B={B:.4f}; Mcr={Mcr:.3f}."))
+    estados.append(EstadoLimiteMomento(
+        "LTB — Pandeo lateral-torsional", Mn_ltb, eq_ltb,
+        f"B={B:.4f}; Mcr={Mcr:.3f}.",
+        descripcion_Fcr="F9 utiliza el momento crítico Mcr; estas ecuaciones no definen Fcr.",
+    ))
 
     if perfil == "Tee":
         if not stem_comp:
@@ -912,7 +956,10 @@ def calcular_f9(
             else:
                 Mn_flb, eq = 0.7 * E * Sxc / flange.lambda_real**2, "F9-15"
             if Mn_flb != float("inf"):
-                estados.append(EstadoLimiteMomento("FLB — Pandeo local del patín", Mn_flb, eq))
+                estados.append(EstadoLimiteMomento(
+                    "FLB — Pandeo local del patín", Mn_flb, eq,
+                    descripcion_Fcr=f"{eq} calcula Mn directamente; la norma no define Fcr.",
+                ))
         else:
             stem = _buscar_resultado(resultados_b4, ("vástago",))
             lam = stem.lambda_real
@@ -927,20 +974,30 @@ def calcular_f9(
             estados.append(EstadoLimiteMomento(
                 "WLB — Pandeo local del vástago", Fcr * prop.Sx_inf,
                 "F9-16 / " + eq, f"Fcr={Fcr:.3f} MPa.",
-                Fcr=Fcr, descripcion_Fcr=f"Fcr calculado con {eq}.",
+                Fcr=Fcr, descripcion_Fcr=f"Fcr normativo calculado con {eq}.",
             ))
     else:
         # Pata horizontal = ala (Pata 2); pata vertical = alma (Pata 1).
         if stem_comp:
             pata = _buscar_resultado(resultados_b4, ("pata 1",))
-            Mn_llb, eq = _local_pata_angulo(E=E, Fy=Fy, Sc=prop.Sx_sup, resultado_pata=pata)
+            Mn_llb, eq, Fcr_llb, desc_fcr = _local_pata_angulo(
+                E=E, Fy=Fy, Sc=prop.Sx_sup, resultado_pata=pata,
+            )
             if Mn_llb != float("inf"):
-                estados.append(EstadoLimiteMomento("WLB — Pandeo local de patas de alma", Mn_llb, "F9.4(b) / " + eq))
+                estados.append(EstadoLimiteMomento(
+                    "WLB — Pandeo local de patas de alma", Mn_llb, "F9.4(b) / " + eq,
+                    Fcr=Fcr_llb, descripcion_Fcr=desc_fcr,
+                ))
         else:
             pata = _buscar_resultado(resultados_b4, ("pata 2",))
-            Mn_llb, eq = _local_pata_angulo(E=E, Fy=Fy, Sc=prop.Sx_inf, resultado_pata=pata)
+            Mn_llb, eq, Fcr_llb, desc_fcr = _local_pata_angulo(
+                E=E, Fy=Fy, Sc=prop.Sx_inf, resultado_pata=pata,
+            )
             if Mn_llb != float("inf"):
-                estados.append(EstadoLimiteMomento("FLB — Pandeo local de patas de ala", Mn_llb, "F9.3(b) / " + eq))
+                estados.append(EstadoLimiteMomento(
+                    "FLB — Pandeo local de patas de ala", Mn_llb, "F9.3(b) / " + eq,
+                    Fcr=Fcr_llb, descripcion_Fcr=desc_fcr,
+                ))
     return _resolver("F9", estados)
 
 
@@ -1021,17 +1078,25 @@ def calcular_f10(
     estados = [EstadoLimiteMomento("Y — Fluencia", 1.5 * My, "F10-1", f"My={My:.3f}.")]
     if Mcr is not None:
         Mn_ltb, eq = _curva_f10_ltb(My, Mcr)
-        estados.append(EstadoLimiteMomento("LTB — Pandeo lateral-torsional", Mn_ltb, eq,
-                                           f"Mcr={Mcr:.3f}; Cb limitado a {Cb_f10:.3f}."))
+        estados.append(EstadoLimiteMomento(
+            "LTB — Pandeo lateral-torsional", Mn_ltb, eq,
+            f"Mcr={Mcr:.3f}; Cb limitado a {Cb_f10:.3f}.",
+            descripcion_Fcr="F10 utiliza el momento crítico Mcr; estas ecuaciones no definen Fcr.",
+        ))
 
     if extremo_libre == "Compresión":
         palabra = "pata 1" if pata_comprimida == "Pata 1" else "pata 2"
         pata = _buscar_resultado(resultados_b4, (palabra,))
         Sc = Sdis
-        Mn_llb, eq_llb = _local_pata_angulo(E=E, Fy=Fy, Sc=Sc, resultado_pata=pata)
+        Mn_llb, eq_llb, Fcr_llb, desc_fcr = _local_pata_angulo(
+            E=E, Fy=Fy, Sc=Sc, resultado_pata=pata,
+        )
         if Mn_llb != float("inf"):
-            estados.append(EstadoLimiteMomento("LLB — Pandeo local de la pata", Mn_llb, eq_llb,
-                                               f"Pata evaluada: {pata_comprimida}; Sc={Sc:.3f}."))
+            estados.append(EstadoLimiteMomento(
+                "LLB — Pandeo local de la pata", Mn_llb, eq_llb,
+                f"Pata evaluada: {pata_comprimida}; Sc={Sc:.3f}.",
+                Fcr=Fcr_llb, descripcion_Fcr=desc_fcr,
+            ))
     return _resolver("F10", estados)
 
 
@@ -1043,18 +1108,17 @@ def calcular_f11_barra_rectangular(
     estados = [EstadoLimiteMomento("Y — Fluencia", Mp, "F11-1")]
     parametro = Lb * d / t**2
     Fcr_ltb = None
-    descripcion_fcr = ""
     if parametro <= 0.08 * E / Fy:
         Mn_ltb, eq = Mp, "F11-2(a)"
+        descripcion_fcr = "LTB no aplica en este intervalo; la norma no define Fcr."
     elif parametro <= 1.9 * E / Fy:
         Mn_ltb = Cb * (1.52 - 0.274 * parametro * Fy / E) * Fy * S
         Mn_ltb, eq = min(Mn_ltb, Mp), "F11-3"
-        Fcr_ltb = Mn_ltb / S
-        descripcion_fcr = "Fcr equivalente = Mn/S; F11-3 calcula Mn directamente."
+        descripcion_fcr = "F11-3 calcula Mn directamente; la norma no define Fcr."
     else:
         Fcr_ltb = 1.9 * E * Cb / parametro
         Mn_ltb, eq = min(Fcr_ltb * S, Mp), "F11-4 / F11-5"
-        descripcion_fcr = "Fcr calculado con F11-5."
+        descripcion_fcr = "Fcr normativo calculado con F11-5."
     estados.append(EstadoLimiteMomento(
         "LTB — Pandeo lateral-torsional", Mn_ltb, eq,
         (f"Fcr={Fcr_ltb:.3f} MPa." if Fcr_ltb is not None else ""),
