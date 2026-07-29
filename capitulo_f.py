@@ -1071,6 +1071,168 @@ def agregar_estados(resultado: ResultadoCapituloF, estados_adicionales: Iterable
     return _resolver(resultado.seccion, [*resultado.estados, *extras], *resultado.observaciones)
 
 
+
+# -----------------------------------------------------------------------------
+# Agujeros de pernos para F13.1
+# -----------------------------------------------------------------------------
+# Dimensiones máximas nominales de agujeros según AISC 360-22, Tabla J3.3.
+# Todas las dimensiones se almacenan internamente en milímetros. Para el cálculo
+# del área neta, B4.3b exige aumentar la dimensión nominal del agujero en 2 mm
+# para la serie métrica o 1/16 in para la serie imperial.
+_PERNOS_METRICOS_MM: dict[str, float] = {
+    "M12": 12.0,
+    "M16": 16.0,
+    "M20": 20.0,
+    "M22": 22.0,
+    "M24": 24.0,
+    "M27": 27.0,
+    "M30": 30.0,
+    "M36": 36.0,
+}
+
+_PERNOS_IMPERIALES_IN: dict[str, float] = {
+    '1/2 in': 0.5,
+    '5/8 in': 0.625,
+    '3/4 in': 0.75,
+    '7/8 in': 0.875,
+    '1 in': 1.0,
+    '1 1/8 in': 1.125,
+    '1 1/4 in': 1.25,
+    '1 3/8 in': 1.375,
+    '1 1/2 in': 1.5,
+}
+
+# (ancho, longitud) nominales del agujero, en mm. En agujeros circulares ambas
+# dimensiones son iguales. La longitud de la ranura se usa cuando la ranura es
+# perpendicular a la fuerza que produce la sección neta.
+_AGUJEROS_METRICOS_J33: dict[float, dict[str, tuple[float, float]]] = {
+    12.0: {"Estándar": (14.0, 14.0), "Sobredimensionado": (16.0, 16.0), "Ranura corta": (14.0, 18.0), "Ranura larga": (14.0, 32.0)},
+    16.0: {"Estándar": (18.0, 18.0), "Sobredimensionado": (20.0, 20.0), "Ranura corta": (18.0, 22.0), "Ranura larga": (18.0, 40.0)},
+    20.0: {"Estándar": (22.0, 22.0), "Sobredimensionado": (24.0, 24.0), "Ranura corta": (22.0, 26.0), "Ranura larga": (22.0, 50.0)},
+    22.0: {"Estándar": (24.0, 24.0), "Sobredimensionado": (28.0, 28.0), "Ranura corta": (24.0, 30.0), "Ranura larga": (24.0, 55.0)},
+    24.0: {"Estándar": (27.0, 27.0), "Sobredimensionado": (30.0, 30.0), "Ranura corta": (27.0, 32.0), "Ranura larga": (27.0, 60.0)},
+    27.0: {"Estándar": (30.0, 30.0), "Sobredimensionado": (35.0, 35.0), "Ranura corta": (30.0, 37.0), "Ranura larga": (30.0, 67.0)},
+    30.0: {"Estándar": (33.0, 33.0), "Sobredimensionado": (38.0, 38.0), "Ranura corta": (33.0, 40.0), "Ranura larga": (33.0, 75.0)},
+    36.0: {"Estándar": (39.0, 39.0), "Sobredimensionado": (44.0, 44.0), "Ranura corta": (39.0, 46.0), "Ranura larga": (39.0, 90.0)},
+}
+
+
+def opciones_pernos_comerciales(serie: str) -> tuple[str, ...]:
+    """Devuelve las etiquetas comerciales disponibles para la serie elegida."""
+    if serie == "Métrica":
+        return tuple(_PERNOS_METRICOS_MM)
+    if serie == "Imperial":
+        return tuple(_PERNOS_IMPERIALES_IN)
+    raise ValueError("La serie de pernos debe ser 'Métrica' o 'Imperial'.")
+
+
+def _dimensiones_agujero_imperial(db_in: float, tipo: str) -> tuple[float, float]:
+    """Tabla J3.3 en pulgadas; devuelve ancho y longitud nominales."""
+    if db_in <= 0:
+        raise ValueError("El diámetro nominal del perno debe ser mayor que cero.")
+    ancho = db_in + 1.0 / 16.0
+    if tipo == "Estándar":
+        largo = ancho
+    elif tipo == "Sobredimensionado":
+        if db_in <= 7.0 / 8.0:
+            largo = db_in + 3.0 / 16.0
+        elif db_in <= 1.0:
+            largo = db_in + 1.0 / 4.0
+        else:
+            largo = db_in + 5.0 / 16.0
+        ancho = largo
+    elif tipo == "Ranura corta":
+        if db_in <= 7.0 / 8.0:
+            largo = db_in + 1.0 / 4.0
+        elif db_in <= 1.0:
+            largo = db_in + 5.0 / 16.0
+        else:
+            largo = db_in + 3.0 / 8.0
+    elif tipo == "Ranura larga":
+        largo = 2.5 * db_in
+    else:
+        raise ValueError(f"Tipo de agujero no reconocido: {tipo}.")
+    return ancho * 25.4, largo * 25.4
+
+
+def dimensiones_agujero_j33(
+    *, serie: str, perno: str, tipo: str,
+    orientacion_ranura: str = "Paralela a la fuerza",
+) -> tuple[float, float, float, float]:
+    """Devuelve ``(db, ancho, largo, d_neta)`` en mm.
+
+    ``d_neta`` es la dimensión que se descuenta perpendicularmente a la fuerza,
+    incluida la adición exigida por B4.3b. Para ranuras paralelas a la fuerza se
+    descuenta el ancho; para ranuras perpendiculares, la longitud.
+    """
+    tipos = {"Estándar", "Sobredimensionado", "Ranura corta", "Ranura larga"}
+    if tipo not in tipos:
+        raise ValueError(f"Tipo de agujero no reconocido: {tipo}.")
+
+    if serie == "Métrica":
+        try:
+            db = _PERNOS_METRICOS_MM[perno]
+            ancho, largo = _AGUJEROS_METRICOS_J33[db][tipo]
+        except KeyError as exc:
+            raise ValueError(f"Perno métrico no reconocido: {perno}.") from exc
+        incremento_neto = 2.0
+    elif serie == "Imperial":
+        try:
+            db_in = _PERNOS_IMPERIALES_IN[perno]
+        except KeyError as exc:
+            raise ValueError(f"Perno imperial no reconocido: {perno}.") from exc
+        db = db_in * 25.4
+        ancho, largo = _dimensiones_agujero_imperial(db_in, tipo)
+        incremento_neto = 25.4 / 16.0
+    else:
+        raise ValueError("La serie de pernos debe ser 'Métrica' o 'Imperial'.")
+
+    if tipo.startswith("Ranura"):
+        if orientacion_ranura == "Paralela a la fuerza":
+            dimension_transversal = ancho
+        elif orientacion_ranura == "Perpendicular a la fuerza":
+            dimension_transversal = largo
+        else:
+            raise ValueError("Orientación de ranura no reconocida.")
+    else:
+        dimension_transversal = ancho
+
+    d_neta = dimension_transversal + incremento_neto
+    return db, ancho, largo, d_neta
+
+
+def deduccion_ancho_seccion_neta(
+    *, numero_agujeros: int, d_neta: float, disposicion: str,
+    numero_diagonales: int = 0, s: float | None = None, g: float | None = None,
+) -> float:
+    """Deducción total de ancho para una trayectoria neta crítica.
+
+    Para agujeros alineados devuelve ``n·d_neta``. Para una trayectoria
+    escalonada aplica la adición ``Σs²/(4g)`` indicada para agujeros alternados.
+    """
+    if numero_agujeros < 1:
+        raise ValueError("La sección neta crítica debe atravesar al menos un agujero.")
+    _positivo("d_neta", d_neta)
+    deduccion = numero_agujeros * d_neta
+    if disposicion == "Alineados":
+        return deduccion
+    if disposicion != "Escalonados":
+        raise ValueError("La disposición debe ser 'Alineados' o 'Escalonados'.")
+    if numero_diagonales < 1:
+        raise ValueError("Una trayectoria escalonada debe incluir al menos un tramo diagonal.")
+    if s is None or g is None:
+        raise ValueError("Para agujeros escalonados se requieren s y g.")
+    _positivo("s", s)
+    _positivo("g", g)
+    deduccion -= numero_diagonales * s**2 / (4.0 * g)
+    if deduccion <= 0:
+        raise ValueError(
+            "La deducción neta resultó no positiva. Revise el número de agujeros, "
+            "los tramos diagonales y las separaciones s y g."
+        )
+    return deduccion
+
+
 def verificar_agujeros_ala_tension(
     *, Fu: float, Fy: float, Afg: float, Afn: float, Sx: float,
 ) -> tuple[bool, float | None, float, str]:
@@ -1083,7 +1245,7 @@ def verificar_agujeros_ala_tension(
         _positivo(n, v)
     if Afn > Afg:
         raise ValueError("Afn no puede ser mayor que Afg.")
-    Yt = 1.0 if Fu / Fy >= 1.3 else 1.1
+    Yt = 1.0 if Fy / Fu <= 0.8 else 1.1
     izquierda = Fu * Afn
     derecha = Yt * Fy * Afg
     if izquierda >= derecha:

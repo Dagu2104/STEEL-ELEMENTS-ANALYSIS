@@ -87,7 +87,7 @@ a la unidad seleccionada por el usuario. Se adoptan `ϕb = 0.90` y `Ωb = 1.67`.
 - La interfaz no crea secciones completamente asimétricas personalizadas; F12 se
   identifica como ruta de análisis cuando corresponde, pero no se calcula con
   fórmulas cerradas.
-- F13.1 se verifica para agujeros en el ala de tensión y puede gobernar el momento nominal.
+- F13.1 identifica automáticamente el ala de tracción y solo incorpora una cubreplaca cuando está ubicada en ese lado. El usuario selecciona el diámetro comercial del perno, el tipo de agujero, la cantidad de agujeros atravesados por la trayectoria crítica y si están alineados o escalonados. El programa obtiene la dimensión nominal del agujero, aplica la adición de B4.3b y calcula automáticamente `Afg`, `Afn` y `Yt`.
 - F13.2 verifica automáticamente las proporciones disponibles de perfiles I; la separación
   entre rigidizadores se solicita cuando el alma es esbelta.
 - Los requisitos de detalle de cubreplacas y vigas armadas de F13.3/F13.4 dependen de

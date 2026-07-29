@@ -43,6 +43,9 @@ from capitulo_f import (
     ruta_capitulo_f,
     verificar_agujeros_ala_tension,
     verificaciones_proporcion_i_f13,
+    opciones_pernos_comerciales,
+    dimensiones_agujero_j33,
+    deduccion_ancho_seccion_neta,
 )
 
 from funciones import (
@@ -677,39 +680,259 @@ def mostrar_ruta_y_diseno_capitulo_f(
                 if mostrar_f13:
                     st.markdown("### F13 — Provisiones adicionales")
                     st.markdown("**F13.1 — Agujeros en el ala de tensión**")
+
+                    # El lado en tracción es el opuesto al lado seleccionado en
+                    # compresión. Solo una cubreplaca ubicada en ese lado forma
+                    # parte de Afg y Afn para F13.1.
+                    lado_tension = "Inferior" if lado_compresion == "Superior" else "Superior"
+                    clave_tension = lado_tension.lower()
+                    clave_estado = f"{perfil}_{clave_tension}".replace(" ", "_")
+
+                    componentes_tension: list[dict[str, float | str]] = []
+                    if perfil in {"Perfil I", "Perfil I asimétrico"}:
+                        if perfil == "Perfil I":
+                            bf_t, tf_t = geo["bf"], geo["tf"]
+                        elif lado_tension == "Inferior":
+                            bf_t, tf_t = geo["bf_inferior"], geo["tf_inferior"]
+                        else:
+                            bf_t, tf_t = geo["bf_superior"], geo["tf_superior"]
+                        componentes_tension.append({
+                            "nombre": f"Patín {lado_tension.lower()}",
+                            "b": float(bf_t), "t": float(tf_t),
+                        })
+                        cp_tension = cubreplacas.get(clave_tension)
+                        if cp_tension:
+                            componentes_tension.append({
+                                "nombre": f"Cubreplaca {lado_tension.lower()}",
+                                "b": float(cp_tension.get("B", cp_tension.get("b", 0.0))),
+                                "t": float(cp_tension.get("t", 0.0)),
+                            })
+                    else:
+                        # En el canal, geo['b'] es el vuelo del patín medido desde
+                        # la cara del alma; se suma tw para obtener el ancho total.
+                        componentes_tension.append({
+                            "nombre": f"Ala {lado_tension.lower()} del canal",
+                            "b": float(geo["b"] + geo["tw"]),
+                            "t": float(geo["tf"]),
+                        })
+
+                    st.info(
+                        f"El lado seleccionado en compresión es **{lado_compresion}**; "
+                        f"por tanto, el ala de tracción es la **{lado_tension.lower()}**. "
+                        "Solo los componentes de ese lado se incluyen en Afg y Afn."
+                    )
+                    if perfil in {"Perfil I", "Perfil I asimétrico"}:
+                        clave_compresion = lado_compresion.lower()
+                        if cubreplacas.get(clave_compresion) and not cubreplacas.get(clave_tension):
+                            st.caption(
+                                f"La cubreplaca {clave_compresion} está en compresión y no "
+                                "participa en el área del ala de tracción de F13.1."
+                            )
+
                     hay_agujeros = st.checkbox(
-                        "Existen agujeros para pernos en el ala de tensión",
-                        value=False, key=f"F13_agujeros_{perfil}",
+                        "¿Existen agujeros de pernos en el ala de tracción?",
+                        value=False, key=f"F13_agujeros_{clave_estado}",
+                        help=(
+                            "Active esta opción únicamente cuando la sección neta crítica "
+                            "del ala que trabaja a tracción atraviesa agujeros de pernos."
+                        ),
                     )
                     if hay_agujeros:
                         Fu = entrada_magnitud(
-                            "Esfuerzo último Fu", key=f"F13_Fu_{perfil}",
+                            "Esfuerzo último Fu", key=f"F13_Fu_{clave_estado}",
                             magnitud="esfuerzo", unidad=uF,
                             valor_inicial_interno=450.0, min_interno=0.001,
+                            help="Resistencia mínima especificada a tracción del acero.",
                         )
-                        if perfil in {"Perfil I", "Perfil I asimétrico"}:
-                            if perfil == "Perfil I":
-                                bf_t, tf_t = geo["bf"], geo["tf"]
-                            elif lado_compresion == "Superior":
-                                bf_t, tf_t = geo["bf_inferior"], geo["tf_inferior"]
-                            else:
-                                bf_t, tf_t = geo["bf_superior"], geo["tf_superior"]
-                            clave_t = "inferior" if lado_compresion == "Superior" else "superior"
-                            q_t = cubreplacas.get(clave_t, {})
-                            Afg = bf_t * tf_t + float(q_t.get("B", q_t.get("b", 0.0))) * float(q_t.get("t", 0.0))
+
+                        c_perno1, c_perno2, c_perno3 = st.columns(3)
+                        serie_predeterminada = 1 if uL in {"in", "ft"} else 0
+                        serie_perno = c_perno1.selectbox(
+                            "Serie del perno",
+                            ["Métrica", "Imperial"],
+                            index=serie_predeterminada,
+                            key=f"F13_serie_perno_{clave_estado}",
+                            help="La serie controla los diámetros comerciales y la adición para área neta de B4.3b.",
+                        )
+                        diametros_disponibles = opciones_pernos_comerciales(serie_perno)
+                        perno = c_perno2.selectbox(
+                            "Diámetro nominal comercial",
+                            diametros_disponibles,
+                            index=min(2, len(diametros_disponibles) - 1),
+                            key=f"F13_perno_{clave_estado}_{serie_perno}",
+                            help="Seleccione el diámetro nominal del perno; el programa obtiene internamente el agujero de J3.3.",
+                        )
+                        tipo_agujero = c_perno3.selectbox(
+                            "Tipo de agujero",
+                            ["Estándar", "Sobredimensionado", "Ranura corta", "Ranura larga"],
+                            key=f"F13_tipo_agujero_{clave_estado}",
+                            help="Dimensiones máximas nominales según la Tabla J3.3.",
+                        )
+
+                        orientacion_ranura = "Paralela a la fuerza"
+                        if tipo_agujero.startswith("Ranura"):
+                            orientacion_ranura = st.radio(
+                                "Orientación de la ranura",
+                                ["Paralela a la fuerza", "Perpendicular a la fuerza"],
+                                horizontal=True,
+                                key=f"F13_orientacion_ranura_{clave_estado}",
+                                help=(
+                                    "Si la ranura es paralela a la fuerza, la sección neta "
+                                    "descuenta su dimensión corta. Si es perpendicular, "
+                                    "descuenta su dimensión larga."
+                                ),
+                            )
+
+                        db, ancho_agujero, largo_agujero, d_neta = dimensiones_agujero_j33(
+                            serie=serie_perno, perno=perno, tipo=tipo_agujero,
+                            orientacion_ranura=orientacion_ranura,
+                        )
+                        qh1, qh2, qh3 = st.columns(3)
+                        qh1.metric("Diámetro nominal del perno", f"{valor_mostrado(db, 'longitud', uL):,.3f} {uL}")
+                        if abs(ancho_agujero - largo_agujero) <= 1e-9:
+                            dim_agujero_texto = f"{valor_mostrado(ancho_agujero, 'longitud', uL):,.3f} {uL}"
                         else:
-                            Afg = (geo["b"] + geo["tw"]) * geo["tf"]
-                        st.metric("Área bruta del ala de tensión Afg", f"{valor_mostrado(Afg, 'longitud', uL, 2):,.4f} {unidad_propiedad(uL, 2)}")
-                        Afn = entrada_magnitud(
-                            "Área neta del ala de tensión Afn", key=f"F13_Afn_{perfil}",
-                            magnitud="longitud", unidad=uL, potencia=2,
-                            valor_inicial_interno=0.90 * Afg, min_interno=0.001, max_interno=Afg,
+                            dim_agujero_texto = (
+                                f"{valor_mostrado(ancho_agujero, 'longitud', uL):,.3f} × "
+                                f"{valor_mostrado(largo_agujero, 'longitud', uL):,.3f} {uL}"
+                            )
+                        qh2.metric("Agujero nominal J3.3", dim_agujero_texto)
+                        qh3.metric(
+                            "Dimensión descontada dₙ",
+                            f"{valor_mostrado(d_neta, 'longitud', uL):,.3f} {uL}",
+                            help=(
+                                "Dimensión transversal nominal del agujero más la adición "
+                                "de B4.3b para calcular el área neta."
+                            ),
                         )
+
+                        n_agujeros = st.number_input(
+                            "Número de agujeros atravesados por la sección neta crítica",
+                            min_value=1, value=2, step=1,
+                            key=f"F13_n_agujeros_{clave_estado}",
+                            help=(
+                                "Ingrese los agujeros que corta una sola trayectoria crítica "
+                                "transversal. No ingrese el número total de pernos de toda la conexión."
+                            ),
+                        )
+                        opciones_disposicion = ["Alineados"] if n_agujeros == 1 else ["Alineados", "Escalonados"]
+                        disposicion = st.radio(
+                            "Disposición de los agujeros en la trayectoria crítica",
+                            opciones_disposicion,
+                            horizontal=True,
+                            key=f"F13_disposicion_{clave_estado}_{n_agujeros}",
+                            help=(
+                                "Para agujeros escalonados se revisa una trayectoria diagonal "
+                                "o en zigzag mediante la adición s²/(4g)."
+                            ),
+                        )
+
+                        numero_diagonales = 0
+                        s_escalonado = None
+                        g_escalonado = None
+                        if disposicion == "Escalonados":
+                            ce1, ce2, ce3 = st.columns(3)
+                            numero_diagonales = ce1.number_input(
+                                "Tramos diagonales de la trayectoria",
+                                min_value=1, max_value=max(1, int(n_agujeros) - 1),
+                                value=max(1, int(n_agujeros) - 1), step=1,
+                                key=f"F13_n_diagonales_{clave_estado}",
+                                help="Cantidad de términos s²/(4g) presentes en la trayectoria neta evaluada.",
+                            )
+                            with ce2:
+                                s_escalonado = entrada_magnitud(
+                                    "Separación longitudinal s", key=f"F13_s_{clave_estado}",
+                                    magnitud="longitud", unidad=uL,
+                                    valor_inicial_interno=75.0, min_interno=0.001,
+                                    help="Separación centro a centro en la dirección de la fuerza entre agujeros escalonados.",
+                                )
+                            with ce3:
+                                g_escalonado = entrada_magnitud(
+                                    "Separación transversal g", key=f"F13_g_{clave_estado}",
+                                    magnitud="longitud", unidad=uL,
+                                    valor_inicial_interno=60.0, min_interno=0.001,
+                                    help="Separación centro a centro perpendicular a la fuerza entre líneas de agujeros.",
+                                )
+
+                        nombres_componentes = [str(c["nombre"]) for c in componentes_tension]
+                        if len(nombres_componentes) == 1:
+                            componentes_perforados = nombres_componentes
+                            st.caption(f"Componente perforado: **{nombres_componentes[0]}**.")
+                        else:
+                            componentes_perforados = st.multiselect(
+                                "Componentes atravesados por los agujeros",
+                                nombres_componentes,
+                                default=nombres_componentes,
+                                key=f"F13_componentes_perforados_{clave_estado}",
+                                help=(
+                                    "Seleccione si la trayectoria atraviesa el patín, la "
+                                    "cubreplaca de tracción o ambos componentes."
+                                ),
+                            )
+                            if not componentes_perforados:
+                                raise ValueError("Seleccione al menos un componente perforado.")
+
+                        deduccion_ancho = deduccion_ancho_seccion_neta(
+                            numero_agujeros=int(n_agujeros), d_neta=d_neta,
+                            disposicion=disposicion,
+                            numero_diagonales=int(numero_diagonales),
+                            s=s_escalonado, g=g_escalonado,
+                        )
+
+                        Afg = 0.0
+                        Afn = 0.0
+                        filas_areas = []
+                        for componente in componentes_tension:
+                            nombre_comp = str(componente["nombre"])
+                            b_comp = float(componente["b"])
+                            t_comp = float(componente["t"])
+                            area_bruta_comp = b_comp * t_comp
+                            perforado = nombre_comp in componentes_perforados
+                            if perforado:
+                                ancho_neto_comp = b_comp - deduccion_ancho
+                                if ancho_neto_comp <= 0:
+                                    raise ValueError(
+                                        f"La deducción de agujeros ({deduccion_ancho:.3f} mm) "
+                                        f"agota el ancho del componente '{nombre_comp}' ({b_comp:.3f} mm)."
+                                    )
+                                area_neta_comp = ancho_neto_comp * t_comp
+                            else:
+                                area_neta_comp = area_bruta_comp
+                            Afg += area_bruta_comp
+                            Afn += area_neta_comp
+                            filas_areas.append({
+                                "Componente del ala de tracción": nombre_comp,
+                                f"b [{uL}]": round(valor_mostrado(b_comp, "longitud", uL), 4),
+                                f"t [{uL}]": round(valor_mostrado(t_comp, "longitud", uL), 4),
+                                "Perforado": "SÍ" if perforado else "NO",
+                                f"Ag [{unidad_propiedad(uL, 2)}]": round(valor_mostrado(area_bruta_comp, "longitud", uL, 2), 4),
+                                f"An [{unidad_propiedad(uL, 2)}]": round(valor_mostrado(area_neta_comp, "longitud", uL, 2), 4),
+                            })
+
+                        st.dataframe(filas_areas, use_container_width=True, hide_index=True)
+                        qa1, qa2, qa3 = st.columns(3)
+                        qa1.metric(
+                            "Deducción total de ancho",
+                            f"{valor_mostrado(deduccion_ancho, 'longitud', uL):,.3f} {uL}",
+                        )
+                        qa2.metric(
+                            "Área bruta del ala de tracción Afg",
+                            f"{valor_mostrado(Afg, 'longitud', uL, 2):,.4f} {unidad_propiedad(uL, 2)}",
+                        )
+                        qa3.metric(
+                            "Área neta del ala de tracción Afn",
+                            f"{valor_mostrado(Afn, 'longitud', uL, 2):,.4f} {unidad_propiedad(uL, 2)}",
+                        )
+
                         Sx_min = min(prop.Sx_sup, prop.Sx_inf)
                         reduce, Mn13, Yt, explicacion13 = verificar_agujeros_ala_tension(
                             Fu=Fu, Fy=Fy, Afg=Afg, Afn=Afn, Sx=Sx_min,
                         )
-                        st.write(f"**Yt = {Yt:.2f}**. {explicacion13}")
+                        st.write(
+                            f"**Yt = {Yt:.2f}** "
+                            f"(Yt = 1.0 cuando Fy/Fu ≤ 0.8; en caso contrario, Yt = 1.1). "
+                            f"{explicacion13}"
+                        )
                         if reduce and Mn13 is not None:
                             estados_f13.append(EstadoLimiteMomento(
                                 "F13 — Ruptura del ala de tensión", Mn13, "F13-1", explicacion13,
