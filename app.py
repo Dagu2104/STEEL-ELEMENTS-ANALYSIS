@@ -58,18 +58,40 @@ def entrada_magnitud(label: str, *, key: str, magnitud: str, unidad: str,
     widget_key = f"_widget_{key}"
     if base_key not in st.session_state:
         st.session_state[base_key] = float(valor_inicial_interno)
-    if st.session_state.get(unit_key) != (unidad, potencia):
+
+    unidad_actual = (unidad, potencia)
+
+    # Streamlit elimina del estado las claves de widgets que dejan de renderizarse.
+    # Esto ocurre, por ejemplo, al cambiar de un tubo a un perfil I y regresar.
+    # Las claves auxiliares _base_* y _unit_* pueden permanecer, por lo que no es
+    # suficiente comprobar únicamente si cambió la unidad: también debemos
+    # reconstruir el valor visible cuando la clave del widget ya no existe.
+    if (
+        widget_key not in st.session_state
+        or st.session_state.get(unit_key) != unidad_actual
+    ):
         st.session_state[widget_key] = desde_interno(
             st.session_state[base_key], magnitud, unidad, potencia
         )
-        st.session_state[unit_key] = (unidad, potencia)
-    # Ajusta el valor visible si cambian límites dinámicos, por ejemplo b <= Bcp.
+        st.session_state[unit_key] = unidad_actual
+
+    # Trabaja con un valor local seguro antes de aplicar límites dinámicos.
+    # Así nunca se intenta leer una clave ausente del session_state.
+    valor_widget = float(
+        st.session_state.get(
+            widget_key,
+            desde_interno(st.session_state[base_key], magnitud, unidad, potencia),
+        )
+    )
+
     if min_interno is not None:
         minimo_visible = desde_interno(min_interno, magnitud, unidad, potencia)
-        st.session_state[widget_key] = max(st.session_state[widget_key], minimo_visible)
+        valor_widget = max(valor_widget, minimo_visible)
     if max_interno is not None:
         maximo_visible = desde_interno(max_interno, magnitud, unidad, potencia)
-        st.session_state[widget_key] = min(st.session_state[widget_key], maximo_visible)
+        valor_widget = min(valor_widget, maximo_visible)
+
+    st.session_state[widget_key] = valor_widget
     kwargs = {"key": widget_key, "help": help}
     if min_interno is not None:
         kwargs["min_value"] = desde_interno(min_interno, magnitud, unidad, potencia)
