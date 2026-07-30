@@ -143,3 +143,43 @@ En G2, la recomendación de rigidizadores distingue la causa de la insuficiencia
 
 - si `Cv < 1.0`, la resistencia está reducida por pandeo del alma y los rigidizadores pueden aumentar `kv` y `Cv`;
 - si `Cv = 1.0`, gobierna la fluencia `0.6FyAw` y los rigidizadores no aumentan ese límite; debe modificarse el alma, reforzarse la sección o elegirse un perfil mayor.
+
+## Fuerzas combinadas y torsión — Capítulo H
+
+La pestaña **Flexocompresión** incorpora el Capítulo H y reutiliza las resistencias disponibles calculadas en las pestañas anteriores. Las ecuaciones de los capítulos E, F y G no se recalculan ni se sustituyen.
+
+La pestaña permite:
+
+- ingresar varias combinaciones en una tabla editable;
+- descargar una plantilla Excel con hojas `Combinaciones`, `Configuracion` e `Instrucciones`;
+- cargar la plantilla completada y editar sus valores antes del cálculo;
+- descargar la tabla actual y un libro de resultados;
+- definir la convención de signos de `Mrx` y `Mry` para identificar el lado comprimido;
+- aplicar H1-1a o H1-1b a miembros doble o simplemente simétricos;
+- calcular automáticamente la resistencia torsional de HSS circular, cuadrado y rectangular mediante H3.1;
+- aplicar H3-6 cuando `Tr/Tc > 0.20`, incluyendo fuerza axial, flexión biaxial, cortante y torsión;
+- identificar la combinación gobernante y exportar el desarrollo de los términos de interacción.
+
+### Formato de la hoja `Combinaciones`
+
+Los encabezados fijos son:
+
+```text
+Combinacion | Tipo_axial | Pr | Mrx | Mry | Vrx | Vry | Tr
+```
+
+`Pr`, `Vrx` y `Vry` usan la unidad de fuerza indicada en `Configuracion`. `Mrx`, `Mry` y `Tr` usan la unidad de momento. `Pr` se ingresa como magnitud positiva y `Tipo_axial` define si corresponde a compresión o tensión. Los momentos se ingresan con signo.
+
+### Recuperación de resistencias
+
+Las capacidades se almacenan con una firma del perfil, material y geometría actuales. Al cambiar dimensiones, material, fabricación o cubreplacas, las capacidades antiguas dejan de ser válidas automáticamente.
+
+Para disponer de las resistencias en ambos ejes, seleccione cada eje y lado comprimido en la barra lateral. La pestaña de flexión guarda `Mcx` o `Mcy` para el lado calculado, y la pestaña de cortante guarda `Vcx` o `Vcy` para el eje calculado.
+
+### Límites actuales del Capítulo H
+
+- La aplicación axial existente corresponde al Capítulo E, es decir, compresión. Las combinaciones con tensión axial se conservan en la tabla, pero no se aprueban hasta incorporar la resistencia del Capítulo D.
+- H2 requiere esfuerzos disponibles en ejes principales y en puntos críticos de la sección. La aplicación no reemplaza esa evaluación con capacidades geométricas `x-x/y-y`; por ello, los perfiles completamente asimétricos se reportan como no evaluados.
+- H3.3 para perfiles no HSS requiere un análisis de torsión y alabeo que determine los esfuerzos y `Fcr`. La interfaz muestra los límites H3-7 a H3-9, pero no genera una interacción automática usando solamente `Tr`.
+- H4 requiere la resistencia de rotura axial del Capítulo D y la resistencia de rotura por flexión de F13.1 para cada patín. Se identifica la ruta, pero no se aprueba hasta que esté disponible el Capítulo D.
+- H1.3 está preparado en `capitulo_h.py`, pero no se selecciona automáticamente porque requiere una resistencia a LTB calculada específicamente con `Cb=1.0` y las capacidades separadas en el plano y fuera del plano.

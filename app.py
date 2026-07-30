@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import html
+import hashlib
+import json
+from io import BytesIO
 from math import ceil
+
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -47,6 +52,18 @@ from capitulo_f import (
     opciones_pernos_comerciales,
     dimensiones_agujero_j33,
     deduccion_ancho_seccion_neta,
+)
+
+
+from capitulo_h import (
+    OMEGA_T,
+    PHI_T,
+    calcular_h11,
+    calcular_h36,
+    calcular_torsion_hss_circular,
+    calcular_torsion_hss_rectangular,
+    ruta_capitulo_h,
+    verificar_h33_manual,
 )
 
 from capitulo_g import (
@@ -147,6 +164,34 @@ def formato(valor_interno: float, magnitud: str, unidad: str, potencia: int = 1,
     valor = valor_mostrado(valor_interno, magnitud, unidad, potencia)
     etiqueta = unidad_propiedad(unidad, potencia) if magnitud == "longitud" else unidad
     return f"{valor:,.{decimales}f} {etiqueta}"
+
+
+def _firma_modelo(
+    *, perfil: str, E: float, Fy: float, geo: dict,
+    fabricacion: str | None, cubreplacas: dict,
+) -> str:
+    """Firma estable para invalidar capacidades almacenadas cuando cambia el perfil."""
+    datos = {
+        "perfil": perfil,
+        "E": round(float(E), 10),
+        "Fy": round(float(Fy), 10),
+        "fabricacion": fabricacion,
+        "geo": geo,
+        "cubreplacas": cubreplacas,
+    }
+    texto = json.dumps(datos, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+def _guardar_capacidad(clave: str, datos: dict) -> None:
+    st.session_state[clave] = datos
+
+
+def _leer_capacidad(clave: str, firma: str) -> dict | None:
+    datos = st.session_state.get(clave)
+    if not isinstance(datos, dict) or datos.get("firma") != firma:
+        return None
+    return datos
 
 
 # -----------------------------------------------------------------------------
@@ -1039,6 +1084,31 @@ def mostrar_ruta_y_diseno_capitulo_f(
             c1.metric("Momento nominal Mn", f"{cvM(resultado_f.Mn):,.4f} {uM}")
             c2.metric("LRFD: ϕbMn", f"{cvM(resultado_f.phi_Mn):,.4f} {uM}")
             c3.metric("ASD: Mn/Ωb", f"{cvM(resultado_f.Mn_sobre_omega):,.4f} {uM}")
+
+            firma = _firma_modelo(
+                perfil=perfil, E=E, Fy=Fy, geo=geo,
+                fabricacion=fabricacion, cubreplacas=cubreplacas,
+            )
+            M_yield_n = Fy * (prop.Zx if eje == "x-x" else prop.Zy)
+            _guardar_capacidad(
+                f"_capacidad_flexion_{eje}_{lado_compresion}",
+                {
+                    "firma": firma,
+                    "perfil": perfil,
+                    "eje": eje,
+                    "lado_compresion": lado_compresion,
+                    "seccion": ruta.seccion,
+                    "clasificacion": clasificacion_global(resultados_b4)[0],
+                    "Mn": float(resultado_f.Mn),
+                    "LRFD": float(resultado_f.phi_Mn),
+                    "ASD": float(resultado_f.Mn_sobre_omega),
+                    "Mn_fluencia": float(M_yield_n),
+                    "LRFD_fluencia": float(0.90 * M_yield_n),
+                    "ASD_fluencia": float(M_yield_n / 1.67),
+                    "gobernante": resultado_f.gobernante.estado,
+                    "ecuacion": resultado_f.gobernante.ecuacion,
+                },
+            )
             for obs in resultado_f.observaciones:
                 st.caption(obs)
 
@@ -1185,6 +1255,26 @@ def mostrar_ruta_y_diseno_capitulo_g(
     uL, uF, uP = unidad_longitud, unidad_esfuerzo, unidad_fuerza
     cvP = lambda v: valor_mostrado(v, "fuerza", uP)
     cvL = lambda v, p=1: valor_mostrado(v, "longitud", uL, p)
+
+    def guardar_capacidad_cortante(resultado: ResultadoCortante, fuente: str) -> None:
+        firma = _firma_modelo(
+            perfil=perfil, E=E, Fy=Fy, geo=geo,
+            fabricacion=fabricacion, cubreplacas=cubreplacas,
+        )
+        _guardar_capacidad(
+            f"_capacidad_cortante_{eje}",
+            {
+                "firma": firma,
+                "perfil": perfil,
+                "eje": eje,
+                "seccion": resultado.seccion,
+                "Vn": float(resultado.Vn),
+                "LRFD": float(resultado.phi_Vn),
+                "ASD": float(resultado.Vn_sobre_omega),
+                "fuente": fuente,
+                "ecuacion": resultado.adoptado.ecuacion,
+            },
+        )
 
     with st.expander("Ruta automática del Capítulo G", expanded=True):
         c1, c2, c3 = st.columns(3)
@@ -1630,6 +1720,7 @@ def mostrar_ruta_y_diseno_capitulo_g(
                 t, mult, desc = geo["t"], 1, pata.lower()
             resultado = calcular_g3(E=E, Fy=Fy, b=b, t=t, multiplicidad=mult, descripcion=desc)
             _mostrar_resultado_cortante(resultado, uP, uF)
+            guardar_capacidad_cortante(resultado, "G3")
             if Vr_general is not None:
                 _comparar_cortante(resultado, metodo, Vr_general, uP)
 
@@ -1649,6 +1740,7 @@ def mostrar_ruta_y_diseno_capitulo_g(
                     descripcion="patas verticales de los dos ángulos",
                 )
             _mostrar_resultado_cortante(resultado, uP, uF)
+            guardar_capacidad_cortante(resultado, "G4")
             if Vr_general is not None:
                 _comparar_cortante(resultado, metodo, Vr_general, uP)
 
@@ -1664,6 +1756,7 @@ def mostrar_ruta_y_diseno_capitulo_g(
             )
             resultado = calcular_g5(E=E, Fy=Fy, Ag=prop.Ag, D=geo["D"], t=geo["t"], Lv=Lv)
             _mostrar_resultado_cortante(resultado, uP, uF)
+            guardar_capacidad_cortante(resultado, "G5")
             if Vr_general is not None:
                 _comparar_cortante(resultado, metodo, Vr_general, uP)
 
@@ -1708,6 +1801,7 @@ def mostrar_ruta_y_diseno_capitulo_g(
 
             resultado = calcular_g6(E=E, Fy=Fy, elementos=elementos)
             _mostrar_resultado_cortante(resultado, uP, uF)
+            guardar_capacidad_cortante(resultado, "G6")
             if Vr_general is not None:
                 _comparar_cortante(resultado, metodo, Vr_general, uP)
 
@@ -1744,7 +1838,7 @@ def datos_fisicos_e7(perfil: str, elemento: str, geo: dict, cubreplacas: dict, f
 
 
 def mostrar_ruta_y_diseno_capitulo_e(
-    perfil, resultados, E, Fy, geo, cubreplacas_grafico, prop,
+    perfil, resultados, E, Fy, geo, fabricacion, cubreplacas_grafico, prop,
     unidad_esfuerzo: str, unidad_longitud: str, unidad_fuerza: str, unidad_momento: str,
 ):
     """Muestra la ruta E1.1 y ejecuta E2/E3/E4/E7 en unidades internas."""
@@ -2116,6 +2210,38 @@ def mostrar_ruta_y_diseno_capitulo_e(
         and "E6" not in ruta.secciones
     )
     if comparacion_axial_completa:
+        firma = _firma_modelo(
+            perfil=perfil, E=E, Fy=Fy, geo=geo,
+            fabricacion=fabricacion, cubreplacas=cubreplacas_grafico,
+        )
+        datos_axiales = {
+            "firma": firma,
+            "perfil": perfil,
+            "Pn": float(Pn_comparacion),
+            "LRFD": float(0.90 * Pn_comparacion),
+            "ASD": float(Pn_comparacion / 1.67),
+            "fuente": fuente_Pn_comparacion,
+        }
+        if res_x is not None:
+            datos_axiales.update({
+                "Pn_x_E3": float(res_x.Pn),
+                "LRFD_x_E3": float(0.90 * res_x.Pn),
+                "ASD_x_E3": float(res_x.Pn / 1.67),
+            })
+        if res_y is not None:
+            datos_axiales.update({
+                "Pn_y_E3": float(res_y.Pn),
+                "LRFD_y_E3": float(0.90 * res_y.Pn),
+                "ASD_y_E3": float(res_y.Pn / 1.67),
+            })
+        if "Lcx" in locals():
+            datos_axiales["Lcx"] = float(Lcx)
+        if "Lcy" in locals():
+            datos_axiales["Lcy"] = float(Lcy)
+        if "Lcz" in locals():
+            datos_axiales["Lcz"] = float(Lcz)
+        _guardar_capacidad("_capacidad_axial_compresion", datos_axiales)
+
         with st.expander("Verificación de la solicitación axial", expanded=False):
             st.caption(f"Capacidad nominal adoptada para comparar: {fuente_Pn_comparacion}.")
             metodo_e = st.radio(
@@ -2152,6 +2278,611 @@ def mostrar_ruta_y_diseno_capitulo_e(
             "La comparación axial se habilita cuando todos los estados límite aplicables "
             "han producido una resistencia nominal final. Revise los bloques E4, E5, E6 o E7 pendientes."
         )
+
+# -----------------------------------------------------------------------------
+# Capítulo H — fuerzas combinadas y torsión
+# -----------------------------------------------------------------------------
+COLUMNAS_COMBINACIONES_H = [
+    "Combinacion", "Tipo_axial", "Pr", "Mrx", "Mry", "Vrx", "Vry", "Tr",
+]
+
+
+def _normalizar_tipo_axial(valor: object) -> str:
+    texto = str(valor or "").strip().lower()
+    traducciones = str.maketrans("áéíóúü", "aeiouu")
+    texto = texto.translate(traducciones)
+    if texto in {"compresion", "compression", "c"}:
+        return "Compresión"
+    if texto in {"tension", "traccion", "t", "tensile"}:
+        return "Tensión"
+    raise ValueError(f"Tipo_axial no reconocido: {valor!r}. Use Compresión o Tensión.")
+
+
+def _tabla_inicial_h() -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "Combinacion": "U1", "Tipo_axial": "Compresión",
+            "Pr": 0.0, "Mrx": 0.0, "Mry": 0.0,
+            "Vrx": 0.0, "Vry": 0.0, "Tr": 0.0,
+        }
+    ], columns=COLUMNAS_COMBINACIONES_H)
+
+
+def _convertir_tabla_unidades_h(
+    tabla: pd.DataFrame, *, fuerza_origen: str, momento_origen: str,
+    fuerza_destino: str, momento_destino: str,
+) -> pd.DataFrame:
+    salida = tabla.copy()
+    for columna in ("Pr", "Vrx", "Vry"):
+        salida[columna] = pd.to_numeric(salida[columna], errors="coerce").fillna(0.0).map(
+            lambda v: desde_interno(a_interno(float(v), "fuerza", fuerza_origen), "fuerza", fuerza_destino)
+        )
+    for columna in ("Mrx", "Mry", "Tr"):
+        salida[columna] = pd.to_numeric(salida[columna], errors="coerce").fillna(0.0).map(
+            lambda v: desde_interno(a_interno(float(v), "momento", momento_origen), "momento", momento_destino)
+        )
+    return salida
+
+
+def _crear_excel_combinaciones_h(
+    tabla: pd.DataFrame, *, metodo: str, unidad_fuerza: str, unidad_momento: str,
+    resultados: pd.DataFrame | None = None,
+    resistencias: pd.DataFrame | None = None,
+    desarrollo: pd.DataFrame | None = None,
+) -> bytes:
+    """Crea la plantilla o el archivo de resultados del Capítulo H."""
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        libro = writer.book
+        fmt_titulo = libro.add_format({
+            "bold": True, "font_color": "#FFFFFF", "bg_color": "#1F4E78",
+            "align": "center", "valign": "vcenter", "border": 1,
+        })
+        fmt_celda = libro.add_format({"border": 1, "num_format": "0.0000"})
+        fmt_texto = libro.add_format({"border": 1})
+        fmt_nota = libro.add_format({"text_wrap": True, "valign": "top"})
+
+        tabla_exportar = tabla[COLUMNAS_COMBINACIONES_H].copy()
+        tabla_exportar.to_excel(writer, sheet_name="Combinaciones", index=False)
+        ws = writer.sheets["Combinaciones"]
+        ws.freeze_panes(1, 0)
+        ws.set_row(0, 24, fmt_titulo)
+        ws.set_column("A:A", 20, fmt_texto)
+        ws.set_column("B:B", 16, fmt_texto)
+        ws.set_column("C:H", 16, fmt_celda)
+        ws.autofilter(0, 0, max(len(tabla_exportar), 1), len(COLUMNAS_COMBINACIONES_H) - 1)
+        ws.data_validation(1, 1, 5000, 1, {
+            "validate": "list", "source": ["Compresión", "Tensión"],
+        })
+
+        config = pd.DataFrame([
+            ("Metodo", metodo),
+            ("Unidad_fuerza", unidad_fuerza),
+            ("Unidad_momento", unidad_momento),
+            ("Version_norma", "AISC 360-22"),
+        ], columns=["Campo", "Valor"])
+        config.to_excel(writer, sheet_name="Configuracion", index=False)
+        wc = writer.sheets["Configuracion"]
+        wc.set_row(0, 24, fmt_titulo)
+        wc.set_column("A:A", 24, fmt_texto)
+        wc.set_column("B:B", 24, fmt_texto)
+
+        instrucciones = pd.DataFrame({"Instrucciones": [
+            "Cada fila debe corresponder a una combinación de carga y a una misma sección del miembro.",
+            "Pr es una magnitud positiva; el sentido axial se define en Tipo_axial.",
+            "Mrx y Mry se ingresan con signo. La aplicación usa la convención de compresión positiva configurada en la pestaña.",
+            "Vrx, Vry y Tr pueden ingresarse con signo; las ecuaciones resistentes usan sus valores absolutos.",
+            "No cambie los nombres de las columnas ni de las hojas Combinaciones y Configuracion.",
+            "Las unidades de Pr, Vrx y Vry son las indicadas en Unidad_fuerza.",
+            "Las unidades de Mrx, Mry y Tr son las indicadas en Unidad_momento.",
+            "Use solicitaciones LRFD o ASD coherentes con el método indicado en Configuracion.",
+        ]})
+        instrucciones.to_excel(writer, sheet_name="Instrucciones", index=False)
+        wi = writer.sheets["Instrucciones"]
+        wi.set_row(0, 24, fmt_titulo)
+        wi.set_column("A:A", 110, fmt_nota)
+        for fila in range(1, len(instrucciones) + 1):
+            wi.set_row(fila, 36)
+
+        if resultados is not None:
+            resultados.to_excel(writer, sheet_name="Resumen", index=False)
+            wr = writer.sheets["Resumen"]
+            wr.freeze_panes(1, 0)
+            wr.set_row(0, 24, fmt_titulo)
+            wr.set_column(0, max(len(resultados.columns) - 1, 0), 18)
+        if resistencias is not None:
+            resistencias.to_excel(writer, sheet_name="Resistencias", index=False)
+            wres = writer.sheets["Resistencias"]
+            wres.set_row(0, 24, fmt_titulo)
+            wres.set_column(0, max(len(resistencias.columns) - 1, 0), 22)
+        if desarrollo is not None:
+            desarrollo.to_excel(writer, sheet_name="Desarrollo", index=False)
+            wd = writer.sheets["Desarrollo"]
+            wd.set_row(0, 24, fmt_titulo)
+            wd.set_column(0, max(len(desarrollo.columns) - 1, 0), 22)
+    return buffer.getvalue()
+
+
+def _leer_excel_combinaciones_h(
+    contenido: bytes, *, unidad_fuerza_actual: str, unidad_momento_actual: str,
+) -> tuple[pd.DataFrame, dict[str, str]]:
+    hojas = pd.read_excel(BytesIO(contenido), sheet_name=None, engine="openpyxl")
+    if "Combinaciones" not in hojas:
+        raise ValueError("El archivo no contiene la hoja 'Combinaciones'.")
+    tabla = hojas["Combinaciones"].copy()
+    faltantes = [c for c in COLUMNAS_COMBINACIONES_H if c not in tabla.columns]
+    if faltantes:
+        raise ValueError("Faltan las columnas: " + ", ".join(faltantes))
+    tabla = tabla[COLUMNAS_COMBINACIONES_H]
+
+    configuracion: dict[str, str] = {}
+    if "Configuracion" in hojas and {"Campo", "Valor"}.issubset(hojas["Configuracion"].columns):
+        for _, fila in hojas["Configuracion"].iterrows():
+            if pd.notna(fila["Campo"]):
+                configuracion[str(fila["Campo"]).strip()] = str(fila["Valor"]).strip()
+    uf_archivo = configuracion.get("Unidad_fuerza", unidad_fuerza_actual)
+    um_archivo = configuracion.get("Unidad_momento", unidad_momento_actual)
+    # Valida unidades a través de los convertidores existentes.
+    a_interno(1.0, "fuerza", uf_archivo)
+    a_interno(1.0, "momento", um_archivo)
+    tabla = _convertir_tabla_unidades_h(
+        tabla, fuerza_origen=uf_archivo, momento_origen=um_archivo,
+        fuerza_destino=unidad_fuerza_actual, momento_destino=unidad_momento_actual,
+    )
+    tabla["Combinacion"] = tabla["Combinacion"].fillna("").astype(str)
+    tabla["Tipo_axial"] = tabla["Tipo_axial"].fillna("Compresión").map(_normalizar_tipo_axial)
+    return tabla, configuracion
+
+
+def _lado_opuesto_h(eje: str, lado: str) -> str:
+    if eje == "x-x":
+        return "Inferior" if lado == "Superior" else "Superior"
+    return "Izquierda" if lado == "Derecha" else "Derecha"
+
+
+def _capacidad_flexion_h(
+    *, eje: str, momento: float, lado_positivo: str, firma: str,
+    metodo: str, simetria: str,
+) -> tuple[float | None, str, dict | None]:
+    if abs(momento) <= 1e-12:
+        return 1.0, "Sin demanda", None
+    lado = lado_positivo if momento >= 0 else _lado_opuesto_h(eje, lado_positivo)
+    datos = _leer_capacidad(f"_capacidad_flexion_{eje}_{lado}", firma)
+    if datos is None and simetria == "Doble simetría":
+        datos = _leer_capacidad(
+            f"_capacidad_flexion_{eje}_{_lado_opuesto_h(eje, lado)}", firma
+        )
+    if datos is None:
+        return None, lado, None
+    return float(datos[metodo]), lado, datos
+
+
+def _capacidad_cortante_h(
+    *, eje: str, demanda: float, firma: str, metodo: str,
+    perfil: str,
+) -> tuple[float | None, dict | None]:
+    if abs(demanda) <= 1e-12:
+        return 1.0, None
+    datos = _leer_capacidad(f"_capacidad_cortante_{eje}", firma)
+    if datos is None and perfil in {"Tubo cuadrado", "Tubo circular"}:
+        otro = "y-y" if eje == "x-x" else "x-x"
+        datos = _leer_capacidad(f"_capacidad_cortante_{otro}", firma)
+    if datos is None:
+        return None, None
+    return float(datos[metodo]), datos
+
+
+def _fila_resistencia_h(nombre: str, datos: dict | None, metodo: str,
+                        magnitud: str, unidad: str) -> dict[str, object]:
+    if datos is None:
+        return {"Resistencia": nombre, "Estado": "No disponible", "Valor": "—", "Fuente": "—"}
+    valor = float(datos[metodo])
+    return {
+        "Resistencia": nombre,
+        "Estado": "Disponible",
+        "Valor": f"{valor_mostrado(valor, magnitud, unidad):,.4f} {unidad}",
+        "Fuente": datos.get("fuente", datos.get("seccion", "—")),
+    }
+
+
+def mostrar_capitulo_h(
+    *, perfil: str, E: float, Fy: float, geo: dict, fabricacion: str | None,
+    cubreplacas: dict, prop: PropiedadesSeccion,
+    unidad_fuerza: str, unidad_momento: str, unidad_longitud: str,
+    unidad_esfuerzo: str,
+) -> None:
+    """Interfaz del Capítulo H sin recalcular E, F o G."""
+    firma = _firma_modelo(
+        perfil=perfil, E=E, Fy=Fy, geo=geo,
+        fabricacion=fabricacion, cubreplacas=cubreplacas,
+    )
+    simetria = determinar_simetria_perfil(perfil, geo, cubreplacas)
+    es_hss = perfil in {"Tubo cuadrado", "Tubo rectangular", "Tubo circular"}
+
+    st.info(
+        "El Capítulo H reutiliza las resistencias disponibles almacenadas por las pestañas "
+        "de carga axial, flexión y cortante. No modifica ni repite sus ecuaciones. Para "
+        "guardar las capacidades de ambos ejes, cambie el eje y el lado comprimido en la "
+        "barra lateral y permita que las pestañas correspondientes se recalculen."
+    )
+
+    metodo = st.radio(
+        "Método de diseño para todas las combinaciones",
+        ["LRFD", "ASD"], horizontal=True, key="H_metodo",
+        help="Todas las solicitaciones y resistencias de la tabla deben corresponder al mismo método.",
+    )
+
+    st.subheader("Convención de signos de los momentos")
+    c1, c2 = st.columns(2)
+    lado_mx_positivo = c1.selectbox(
+        "Mx positivo comprime el lado", ["Superior", "Inferior"], key="H_lado_mx_positivo",
+    )
+    lado_my_positivo = c2.selectbox(
+        "My positivo comprime el lado", ["Derecha", "Izquierda"], key="H_lado_my_positivo",
+    )
+    st.caption(
+        "Los signos de Mrx y Mry se usan únicamente para elegir la resistencia del lado "
+        "comprimido. Las ecuaciones H1-1 y H3-6 toman las razones como positivas."
+    )
+
+    # Mantiene los valores físicos cuando el usuario cambia las unidades visibles.
+    unidades_actuales = (unidad_fuerza, unidad_momento)
+    if "H_tabla_combinaciones" not in st.session_state:
+        st.session_state["H_tabla_combinaciones"] = _tabla_inicial_h()
+        st.session_state["H_unidades_tabla"] = unidades_actuales
+    elif st.session_state.get("H_unidades_tabla") != unidades_actuales:
+        uf_ant, um_ant = st.session_state.get("H_unidades_tabla", unidades_actuales)
+        st.session_state["H_tabla_combinaciones"] = _convertir_tabla_unidades_h(
+            st.session_state["H_tabla_combinaciones"],
+            fuerza_origen=uf_ant, momento_origen=um_ant,
+            fuerza_destino=unidad_fuerza, momento_destino=unidad_momento,
+        )
+        st.session_state.pop("H_editor_combinaciones", None)
+        st.session_state["H_unidades_tabla"] = unidades_actuales
+
+    plantilla = _crear_excel_combinaciones_h(
+        _tabla_inicial_h(), metodo=metodo,
+        unidad_fuerza=unidad_fuerza, unidad_momento=unidad_momento,
+    )
+    st.download_button(
+        "Descargar plantilla Excel de combinaciones",
+        data=plantilla,
+        file_name="plantilla_combinaciones_capitulo_H.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="H_descargar_plantilla",
+    )
+
+    archivo = st.file_uploader(
+        "Cargar combinaciones desde Excel", type=["xlsx"], key="H_archivo_excel",
+        help="Use la plantilla descargable para conservar nombres de hojas, columnas y unidades.",
+    )
+    if archivo is not None:
+        contenido = archivo.getvalue()
+        huella = hashlib.sha256(contenido).hexdigest()
+        if st.session_state.get("H_archivo_huella") != huella:
+            try:
+                tabla_archivo, config_archivo = _leer_excel_combinaciones_h(
+                    contenido,
+                    unidad_fuerza_actual=unidad_fuerza,
+                    unidad_momento_actual=unidad_momento,
+                )
+                st.session_state["H_tabla_combinaciones"] = tabla_archivo
+                st.session_state.pop("H_editor_combinaciones", None)
+                st.session_state["H_archivo_huella"] = huella
+                st.session_state["H_config_archivo"] = config_archivo
+                st.success("El archivo fue leído y sus datos se copiaron a la tabla editable.")
+            except (ValueError, KeyError, TypeError) as exc:
+                st.error(str(exc))
+        config_archivo = st.session_state.get("H_config_archivo", {})
+        metodo_archivo = config_archivo.get("Metodo")
+        if metodo_archivo in {"LRFD", "ASD"} and metodo_archivo != metodo:
+            st.warning(
+                f"El archivo indica método {metodo_archivo}, pero la pestaña está configurada como {metodo}. "
+                "Cambie el método antes de calcular para mantener consistencia."
+            )
+
+    st.subheader("Solicitaciones combinadas")
+    st.caption(
+        f"Pr, Vrx y Vry se ingresan en {unidad_fuerza}; Mrx, Mry y Tr en {unidad_momento}. "
+        "Puede agregar o eliminar filas."
+    )
+    tabla_editada = st.data_editor(
+        st.session_state["H_tabla_combinaciones"],
+        num_rows="dynamic", use_container_width=True, hide_index=True,
+        key="H_editor_combinaciones",
+        column_config={
+            "Combinacion": st.column_config.TextColumn("Combinación", required=True),
+            "Tipo_axial": st.column_config.SelectboxColumn(
+                "Tipo axial", options=["Compresión", "Tensión"], required=True,
+            ),
+            "Pr": st.column_config.NumberColumn(f"Pr [{unidad_fuerza}]", format="%.4f"),
+            "Mrx": st.column_config.NumberColumn(f"Mrx [{unidad_momento}]", format="%.4f"),
+            "Mry": st.column_config.NumberColumn(f"Mry [{unidad_momento}]", format="%.4f"),
+            "Vrx": st.column_config.NumberColumn(f"Vrx [{unidad_fuerza}]", format="%.4f"),
+            "Vry": st.column_config.NumberColumn(f"Vry [{unidad_fuerza}]", format="%.4f"),
+            "Tr": st.column_config.NumberColumn(f"Tr [{unidad_momento}]", format="%.4f"),
+        },
+    )
+    st.session_state["H_tabla_combinaciones"] = tabla_editada[COLUMNAS_COMBINACIONES_H].copy()
+
+    archivo_tabla = _crear_excel_combinaciones_h(
+        st.session_state["H_tabla_combinaciones"], metodo=metodo,
+        unidad_fuerza=unidad_fuerza, unidad_momento=unidad_momento,
+    )
+    st.download_button(
+        "Descargar tabla actual",
+        data=archivo_tabla,
+        file_name="combinaciones_capitulo_H.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="H_descargar_tabla_actual",
+    )
+
+    axial = _leer_capacidad("_capacidad_axial_compresion", firma)
+    capacidades_flexion = {
+        ("x-x", "Superior"): _leer_capacidad("_capacidad_flexion_x-x_Superior", firma),
+        ("x-x", "Inferior"): _leer_capacidad("_capacidad_flexion_x-x_Inferior", firma),
+        ("y-y", "Derecha"): _leer_capacidad("_capacidad_flexion_y-y_Derecha", firma),
+        ("y-y", "Izquierda"): _leer_capacidad("_capacidad_flexion_y-y_Izquierda", firma),
+    }
+    cortante_x = _leer_capacidad("_capacidad_cortante_x-x", firma)
+    cortante_y = _leer_capacidad("_capacidad_cortante_y-y", firma)
+
+    st.subheader("Resistencias disponibles recuperadas")
+    filas_cap = [_fila_resistencia_h("Compresión Pc", axial, metodo, "fuerza", unidad_fuerza)]
+    for (eje_cap, lado_cap), datos in capacidades_flexion.items():
+        filas_cap.append(_fila_resistencia_h(
+            f"Flexión {eje_cap} — {lado_cap}", datos, metodo, "momento", unidad_momento
+        ))
+    filas_cap.append(_fila_resistencia_h("Cortante x-x", cortante_x, metodo, "fuerza", unidad_fuerza))
+    filas_cap.append(_fila_resistencia_h("Cortante y-y", cortante_y, metodo, "fuerza", unidad_fuerza))
+    st.dataframe(filas_cap, use_container_width=True, hide_index=True)
+
+    torsion_hss = None
+    if es_hss:
+        st.subheader("H3.1 — Resistencia a torsión del HSS")
+        try:
+            if perfil == "Tubo circular":
+                L_torsion = entrada_magnitud(
+                    "Longitud del miembro L para H3-2a",
+                    key="H_L_torsion_circular", magnitud="longitud", unidad=unidad_longitud,
+                    valor_inicial_interno=3000.0, min_interno=0.001,
+                    help="Longitud L utilizada por H3-2a para el HSS circular.",
+                )
+                torsion_hss = calcular_torsion_hss_circular(
+                    E=E, Fy=Fy, D=geo["D"], t=geo["t"], L=L_torsion,
+                )
+            else:
+                descuento = 3.0 * geo["t"] if fabricacion == "Rolled" else 2.0 * geo["t"]
+                h_plano = max(geo["B"], geo["H"]) - descuento
+                torsion_hss = calcular_torsion_hss_rectangular(
+                    E=E, Fy=Fy, B=geo["B"], H=geo["H"], t=geo["t"], h_plano=h_plano,
+                )
+            ct1, ct2, ct3, ct4 = st.columns(4)
+            ct1.metric("Fcr", f"{valor_mostrado(torsion_hss.Fcr, 'esfuerzo', unidad_esfuerzo):,.4f} {unidad_esfuerzo}")
+            ct2.metric("C", f"{valor_mostrado(torsion_hss.C, 'longitud', unidad_longitud, 3):,.4f} {unidad_propiedad(unidad_longitud, 3)}")
+            ct3.metric("Tn", f"{valor_mostrado(torsion_hss.Tn, 'momento', unidad_momento):,.4f} {unidad_momento}")
+            Tc_mostrado = torsion_hss.phi_Tn if metodo == "LRFD" else torsion_hss.Tn_sobre_omega
+            ct4.metric("Tc disponible", f"{valor_mostrado(Tc_mostrado, 'momento', unidad_momento):,.4f} {unidad_momento}")
+            st.caption(
+                f"Fcr por {torsion_hss.ecuacion_Fcr}; ϕT={PHI_T:.2f} y ΩT={OMEGA_T:.2f}."
+            )
+            for nota in torsion_hss.observaciones:
+                st.caption(nota)
+        except (ValueError, ZeroDivisionError) as exc:
+            st.error(str(exc))
+            torsion_hss = None
+    else:
+        st.subheader("H3.3 — Torsión en miembros no HSS")
+        st.warning(
+            "Para perfiles abiertos, H3.3 requiere esfuerzos por torsión, alabeo y un Fcr "
+            "determinado mediante análisis. El Capítulo H suministrado no define una fórmula "
+            "general para convertir Tr en esos esfuerzos, por lo que las combinaciones con "
+            "torsión no se aprobarán automáticamente."
+        )
+        usar_h33 = st.checkbox("Mostrar los límites resistentes de H3.3", key="H_mostrar_h33")
+        if usar_h33:
+            Fcr_h33 = entrada_magnitud(
+                "Fcr obtenido del análisis torsional",
+                key="H_Fcr_h33", magnitud="esfuerzo", unidad=unidad_esfuerzo,
+                valor_inicial_interno=0.6 * Fy, min_interno=0.001,
+            )
+            h33 = verificar_h33_manual(Fy=Fy, Fcr=Fcr_h33)
+            st.dataframe([
+                {"Estado límite": "Fluencia normal", "Ecuación": "H3-7", "Fn": valor_mostrado(h33.Fn_normal, "esfuerzo", unidad_esfuerzo)},
+                {"Estado límite": "Fluencia por cortante", "Ecuación": "H3-8", "Fn": valor_mostrado(h33.Fn_cortante, "esfuerzo", unidad_esfuerzo)},
+                {"Estado límite": "Pandeo", "Ecuación": "H3-9", "Fn": valor_mostrado(h33.Fn_pandeo, "esfuerzo", unidad_esfuerzo)},
+            ], use_container_width=True, hide_index=True)
+            st.caption(f"Gobierna: {h33.estado_gobernante}.")
+
+    tiene_agujeros = st.checkbox(
+        "Existen agujeros de pernos en patines sometidos a tensión",
+        value=False, key="H_agujeros_patines",
+        help="Activa la ruta adicional H4 para combinaciones con tensión axial y flexión alrededor de x-x.",
+    )
+
+    tabla = st.session_state["H_tabla_combinaciones"].copy()
+    resultados_salida: list[dict[str, object]] = []
+    desarrollo_salida: list[dict[str, object]] = []
+
+    for indice, fila in tabla.iterrows():
+        rutas: tuple[str, ...] = ()
+        nombre = str(fila.get("Combinacion", "")).strip()
+        if not nombre:
+            continue
+        try:
+            tipo_axial = _normalizar_tipo_axial(fila.get("Tipo_axial", "Compresión"))
+            valores = {}
+            for col in ("Pr", "Mrx", "Mry", "Vrx", "Vry", "Tr"):
+                valor = pd.to_numeric(pd.Series([fila.get(col, 0.0)]), errors="coerce").iloc[0]
+                if pd.isna(valor):
+                    raise ValueError(f"{nombre}: la celda {col} no contiene un número válido.")
+                valores[col] = float(valor)
+            Pr = abs(a_interno(valores["Pr"], "fuerza", unidad_fuerza))
+            Mrx = a_interno(valores["Mrx"], "momento", unidad_momento)
+            Mry = a_interno(valores["Mry"], "momento", unidad_momento)
+            Vrx = a_interno(valores["Vrx"], "fuerza", unidad_fuerza)
+            Vry = a_interno(valores["Vry"], "fuerza", unidad_fuerza)
+            Tr = a_interno(valores["Tr"], "momento", unidad_momento)
+
+            rutas = ruta_capitulo_h(
+                simetria=simetria, es_hss=es_hss, tiene_torsion=abs(Tr) > 1e-12,
+                tiene_agujeros_patines=tiene_agujeros, axial_tension=tipo_axial == "Tensión",
+            )
+
+            if tipo_axial == "Tensión" and Pr > 1e-12:
+                raise ValueError(
+                    "La resistencia axial a tensión del Capítulo D todavía no está disponible en las otras pestañas. "
+                    "La combinación se conserva, pero no puede aprobarse con una capacidad de compresión."
+                )
+            Pc = float(axial[metodo]) if axial is not None else (1.0 if Pr <= 1e-12 else 0.0)
+            if Pr > 1e-12 and axial is None:
+                raise ValueError("No existe una resistencia disponible a compresión del Capítulo E para el perfil actual.")
+
+            Mcx, lado_x, datos_mx = _capacidad_flexion_h(
+                eje="x-x", momento=Mrx, lado_positivo=lado_mx_positivo,
+                firma=firma, metodo=metodo, simetria=simetria,
+            )
+            Mcy, lado_y, datos_my = _capacidad_flexion_h(
+                eje="y-y", momento=Mry, lado_positivo=lado_my_positivo,
+                firma=firma, metodo=metodo, simetria=simetria,
+            )
+            if Mcx is None:
+                raise ValueError(f"Falta calcular la resistencia a flexión x-x con el lado {lado_x} comprimido.")
+            if Mcy is None:
+                raise ValueError(f"Falta calcular la resistencia a flexión y-y con el lado {lado_y} comprimido.")
+
+            if simetria == "Asimétrica":
+                raise ValueError(
+                    "H2-1 requiere esfuerzos disponibles en los ejes principales y en los puntos críticos. "
+                    "Las resistencias geométricas x-x/y-y almacenadas no sustituyen esa evaluación."
+                )
+
+            resultado = None
+            ruta_usada = "H1"
+            if es_hss and abs(Tr) > 1e-12:
+                if torsion_hss is None:
+                    raise ValueError("No se pudo determinar la resistencia torsional Tc del HSS.")
+                Tc = torsion_hss.phi_Tn if metodo == "LRFD" else torsion_hss.Tn_sobre_omega
+                rt = abs(Tr) / Tc
+                if rt <= 0.20 + 1e-12:
+                    resultado = calcular_h11(Pr=Pr, Pc=Pc, Mrx=Mrx, Mcx=Mcx, Mry=Mry, Mcy=Mcy)
+                    ruta_usada = "H3.2 → H1"
+                    observacion_torsion = f"Tr/Tc={rt:.4f} ≤ 0.20; la torsión se omitió en la interacción."
+                else:
+                    Vcx, datos_vx = _capacidad_cortante_h(
+                        eje="x-x", demanda=Vrx, firma=firma, metodo=metodo, perfil=perfil,
+                    )
+                    Vcy, datos_vy = _capacidad_cortante_h(
+                        eje="y-y", demanda=Vry, firma=firma, metodo=metodo, perfil=perfil,
+                    )
+                    if Vcx is None:
+                        raise ValueError("Falta calcular la resistencia a cortante x-x requerida por H3-6.")
+                    if Vcy is None:
+                        raise ValueError("Falta calcular la resistencia a cortante y-y requerida por H3-6.")
+                    resultado = calcular_h36(
+                        Pr=Pr, Pc=Pc, Mrx=Mrx, Mcx=Mcx, Mry=Mry, Mcy=Mcy,
+                        Vrx=Vrx, Vcx=Vcx, Vry=Vry, Vcy=Vcy, Tr=Tr, Tc=Tc,
+                    )
+                    ruta_usada = "H3.2"
+                    observacion_torsion = f"Tr/Tc={rt:.4f} > 0.20; se aplicó H3-6."
+            elif abs(Tr) > 1e-12:
+                raise ValueError(
+                    "La combinación contiene torsión en un perfil no HSS. H3.3 exige un análisis de esfuerzos "
+                    "torsionales y de alabeo; no existe una interacción automática válida solo con Tr."
+                )
+            else:
+                resultado = calcular_h11(Pr=Pr, Pc=Pc, Mrx=Mrx, Mcx=Mcx, Mry=Mry, Mcy=Mcy)
+                observacion_torsion = "Sin torsión requerida."
+
+            if tiene_agujeros and tipo_axial == "Tensión" and (abs(Mrx) > 1e-12 or Pr > 1e-12):
+                raise ValueError(
+                    "H4 fue identificado, pero requiere Pc de rotura a tensión según D2(b) y Mcx de F13.1 "
+                    "para cada patín. La capacidad del Capítulo D aún no está disponible."
+                )
+
+            ir = float(resultado.interaccion)
+            estado = "CUMPLE" if ir <= 1.0 else "NO CUMPLE"
+            resultados_salida.append({
+                "Combinación": nombre,
+                "Tipo axial": tipo_axial,
+                "Ruta": ruta_usada,
+                "Ecuación": resultado.ecuacion,
+                "Interacción": ir,
+                "Estado": estado,
+                "Lado Mx": lado_x,
+                "Lado My": lado_y,
+                "Observación": observacion_torsion,
+            })
+            for termino, valor in resultado.terminos.items():
+                desarrollo_salida.append({
+                    "Combinación": nombre, "Ruta": ruta_usada,
+                    "Ecuación": resultado.ecuacion, "Término": termino,
+                    "Valor": valor,
+                })
+        except (ValueError, KeyError, ZeroDivisionError) as exc:
+            resultados_salida.append({
+                "Combinación": nombre,
+                "Tipo axial": str(fila.get("Tipo_axial", "")),
+                "Ruta": " / ".join(rutas) if "rutas" in locals() else "—",
+                "Ecuación": "—",
+                "Interacción": None,
+                "Estado": "NO EVALUADA",
+                "Lado Mx": "—",
+                "Lado My": "—",
+                "Observación": str(exc),
+            })
+
+    st.subheader("Resultados del Capítulo H")
+    if not resultados_salida:
+        st.warning("No existen combinaciones con nombre para evaluar.")
+        return
+    df_resultados = pd.DataFrame(resultados_salida)
+    st.dataframe(df_resultados, use_container_width=True, hide_index=True)
+
+    evaluados = df_resultados[pd.to_numeric(df_resultados["Interacción"], errors="coerce").notna()].copy()
+    if not evaluados.empty:
+        idx_gob = pd.to_numeric(evaluados["Interacción"], errors="coerce").idxmax()
+        gob = evaluados.loc[idx_gob]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Combinación gobernante", str(gob["Combinación"]))
+        c2.metric("Ruta", str(gob["Ruta"]))
+        c3.metric("Interacción", f"{float(gob['Interacción']):,.4f}")
+        c4.metric("Estado", str(gob["Estado"]))
+        if float(gob["Interacción"]) > 1.0:
+            st.error("La combinación gobernante no cumple el Capítulo H.")
+        elif float(gob["Interacción"]) > 0.95:
+            st.warning("La combinación gobernante cumple, pero se encuentra próxima al límite.")
+        else:
+            st.success("Las combinaciones evaluadas cumplen el Capítulo H.")
+
+    for fila_resultado in resultados_salida:
+        with st.expander(
+            f"{fila_resultado['Combinación']} — {fila_resultado['Estado']}", expanded=False
+        ):
+            st.write(f"**Ruta:** {fila_resultado['Ruta']} · **Ecuación:** {fila_resultado['Ecuación']}")
+            if fila_resultado["Interacción"] is not None:
+                st.metric("Interacción", f"{float(fila_resultado['Interacción']):,.4f}")
+                detalle = [x for x in desarrollo_salida if x["Combinación"] == fila_resultado["Combinación"]]
+                if detalle:
+                    st.dataframe(detalle, use_container_width=True, hide_index=True)
+            st.caption(str(fila_resultado["Observación"]))
+
+    resistencias_exportar = pd.DataFrame(filas_cap)
+    desarrollo_exportar = pd.DataFrame(desarrollo_salida)
+    archivo_resultados = _crear_excel_combinaciones_h(
+        tabla, metodo=metodo, unidad_fuerza=unidad_fuerza,
+        unidad_momento=unidad_momento, resultados=df_resultados,
+        resistencias=resistencias_exportar,
+        desarrollo=desarrollo_exportar,
+    )
+    st.download_button(
+        "Descargar resultados del Capítulo H",
+        data=archivo_resultados,
+        file_name="resultados_capitulo_H.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="H_descargar_resultados",
+    )
+
 
 # -----------------------------------------------------------------------------
 # Barra lateral
@@ -2380,7 +3111,7 @@ for tab, titulo in [
     (tab_axial, "Elementos sujetos a carga axial de compresión"),
     (tab_flexion, "Elementos sujetos a flexión"),
     (tab_cortante, "Elementos sujetos a cortante"),
-    (tab_interaccion, "Elementos sujetos a flexocompresión"),
+    (tab_interaccion, "Capítulo H — Fuerzas combinadas y torsión"),
 ]:
     with tab:
         st.header(titulo)
@@ -2394,7 +3125,7 @@ for tab, titulo in [
             elif resultados:
                 mostrar_resultados(resultados)
                 mostrar_ruta_y_diseno_capitulo_e(
-                    perfil, resultados, E, Fy, geo, cubreplacas_grafico,
+                    perfil, resultados, E, Fy, geo, fabricacion, cubreplacas_grafico,
                     propiedades, unidad_esfuerzo, unidad_longitud, unidad_fuerza, unidad_momento,
                 )
         elif tab is tab_flexion:
@@ -2425,6 +3156,15 @@ for tab, titulo in [
                     unidad_esfuerzo, unidad_longitud, unidad_fuerza,
                 )
         else:
-            st.info("Las propiedades geométricas ya se calculan automáticamente. Las ecuaciones de interacción se incorporarán en un módulo posterior.")
+            if propiedades is None:
+                st.error(error_propiedades or "No se pudieron calcular las propiedades geométricas.")
+            else:
+                mostrar_capitulo_h(
+                    perfil=perfil, E=E, Fy=Fy, geo=geo, fabricacion=fabricacion,
+                    cubreplacas=cubreplacas_grafico, prop=propiedades,
+                    unidad_fuerza=unidad_fuerza, unidad_momento=unidad_momento,
+                    unidad_longitud=unidad_longitud,
+                    unidad_esfuerzo=unidad_esfuerzo,
+                )
 
 st.caption("Herramienta de apoyo. Confirme siempre las definiciones geométricas y la edición normativa aplicable al proyecto.")
