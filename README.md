@@ -190,3 +190,17 @@ Para disponer de las resistencias en ambos ejes, seleccione cada eje y lado comp
 - El valor almacenado para G2 corresponde conservadoramente al perfil sin rigidizadores transversales.
 - La tabla de resultados del Capítulo H colorea `CUMPLE` en verde, `NO CUMPLE` en rojo y `NO EVALUADA` en amarillo.
 - La combinación gobernante y cada combinación individual muestran una tarjeta de estado con el mismo código de colores.
+
+## Evaluación parcial de perfiles abiertos con torsión
+
+Cuando una combinación contiene `Tr ≠ 0` y la sección es un perfil abierto, la aplicación ya no descarta toda la combinación:
+
+- evalúa la interacción axial–flexión mediante H1 cuando la simetría del perfil lo permite;
+- reporta por separado el estado de la interacción calculada;
+- identifica H3.3 como `PENDIENTE`;
+- si H1 no cumple, el resultado general es `NO CUMPLE`;
+- si H1 cumple pero H3.3 está pendiente, el resultado general es `VERIFICACIÓN INCOMPLETA`.
+
+La advertencia indica que los esfuerzos por torsión no uniforme y alabeo pueden obtenerse mediante **IDEA StatiCa Member** u otro software que considere explícitamente estos efectos. La opción de H3.3 se denomina **Mostrar criterios resistentes informativos de H3.3**, porque `Fy`, `0.6Fy` y `Fcr` son límites de esfuerzo y no una resistencia torsional `Tc`.
+
+Esta corrección no modifica las ecuaciones ni los cálculos existentes de los capítulos E, F, G o H1/H3.2.

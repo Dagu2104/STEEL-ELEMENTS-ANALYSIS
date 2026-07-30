@@ -2492,10 +2492,12 @@ def _fila_resistencia_h(nombre: str, datos: dict | None, metodo: str,
 def _estilo_estado_h(valor: object) -> str:
     """Colorea las celdas de estado en las tablas del Capítulo H."""
     estado = str(valor).strip().upper()
-    if estado == "CUMPLE":
-        return "background-color: #dcfce7; color: #166534; font-weight: 700;"
     if estado == "NO CUMPLE":
         return "background-color: #fee2e2; color: #991b1b; font-weight: 700;"
+    if estado in {"CUMPLE", "EVALUADA", "EVALUADA H3.2"}:
+        return "background-color: #dcfce7; color: #166534; font-weight: 700;"
+    if estado == "NO APLICA":
+        return "background-color: #f3f4f6; color: #374151; font-weight: 700;"
     return "background-color: #fef3c7; color: #92400e; font-weight: 700;"
 
 
@@ -2515,10 +2517,12 @@ def _estilo_interaccion_h(valor: object) -> str:
 def _tarjeta_estado_h(etiqueta: str, estado: str) -> None:
     """Muestra un estado con apariencia de métrica y color semántico."""
     estado_normalizado = str(estado).strip().upper()
-    if estado_normalizado == "CUMPLE":
-        fondo, borde, texto = "#dcfce7", "#22c55e", "#166534"
-    elif estado_normalizado == "NO CUMPLE":
+    if estado_normalizado == "NO CUMPLE":
         fondo, borde, texto = "#fee2e2", "#ef4444", "#991b1b"
+    elif estado_normalizado in {"CUMPLE", "EVALUADA", "EVALUADA H3.2"}:
+        fondo, borde, texto = "#dcfce7", "#22c55e", "#166534"
+    elif estado_normalizado == "NO APLICA":
+        fondo, borde, texto = "#f3f4f6", "#9ca3af", "#374151"
     else:
         fondo, borde, texto = "#fef3c7", "#f59e0b", "#92400e"
     st.markdown(
@@ -2725,18 +2729,39 @@ def mostrar_capitulo_h(
             torsion_hss = None
     else:
         st.subheader("H3.3 — Torsión en miembros no HSS")
-        st.warning(
-            "Para perfiles abiertos, H3.3 requiere esfuerzos por torsión, alabeo y un Fcr "
-            "determinado mediante análisis. El Capítulo H suministrado no define una fórmula "
-            "general para convertir Tr en esos esfuerzos, por lo que las combinaciones con "
-            "torsión no se aprobarán automáticamente."
+        tabla_actual_h = st.session_state.get("H_tabla_combinaciones", _tabla_inicial_h())
+        tr_actual = pd.to_numeric(tabla_actual_h.get("Tr", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+        hay_torsion_abierta = bool((tr_actual.abs() > 1e-12).any())
+        if hay_torsion_abierta:
+            st.warning(
+                "Se detectaron combinaciones con torsión en un perfil abierto. La interacción "
+                "axial–flexión se evaluará mediante H1 cuando sea aplicable, pero el resultado "
+                "general quedará como VERIFICACIÓN INCOMPLETA mientras H3.3 permanezca pendiente. "
+                "Los esfuerzos por torsión no uniforme y alabeo pueden obtenerse con IDEA StatiCa "
+                "Member u otro software que considere explícitamente esos efectos."
+            )
+        else:
+            st.info(
+                "Las combinaciones actuales tienen Tr = 0; por tanto, H3.3 no aplica. Ingrese cero "
+                "únicamente cuando el análisis estructural indique que no existe torsión en el elemento."
+            )
+        usar_h33 = st.checkbox(
+            "Mostrar criterios resistentes informativos de H3.3",
+            key="H_mostrar_h33",
+            help=(
+                "Muestra Fy, 0.6Fy y Fcr como límites nominales de esfuerzo. Estos valores no son "
+                "una capacidad torsional Tc y, por sí solos, no permiten comparar directamente Tr."
+            ),
         )
-        usar_h33 = st.checkbox("Mostrar los límites resistentes de H3.3", key="H_mostrar_h33")
         if usar_h33:
             Fcr_h33 = entrada_magnitud(
                 "Fcr obtenido del análisis torsional",
                 key="H_Fcr_h33", magnitud="esfuerzo", unidad=unidad_esfuerzo,
                 valor_inicial_interno=0.6 * Fy, min_interno=0.001,
+                help=(
+                    "Fcr debe proceder de un análisis torsional y de estabilidad compatible con las "
+                    "restricciones reales de giro y alabeo del miembro."
+                ),
             )
             h33 = verificar_h33_manual(Fy=Fy, Fcr=Fcr_h33)
             st.dataframe([
@@ -2744,7 +2769,12 @@ def mostrar_capitulo_h(
                 {"Estado límite": "Fluencia por cortante", "Ecuación": "H3-8", "Fn": valor_mostrado(h33.Fn_cortante, "esfuerzo", unidad_esfuerzo)},
                 {"Estado límite": "Pandeo", "Ecuación": "H3-9", "Fn": valor_mostrado(h33.Fn_pandeo, "esfuerzo", unidad_esfuerzo)},
             ], use_container_width=True, hide_index=True)
-            st.caption(f"Gobierna: {h33.estado_gobernante}.")
+            st.caption(f"Límite nominal gobernante: {h33.estado_gobernante}.")
+            st.info(
+                "Estos valores son límites de esfuerzo y no constituyen una resistencia torsional Tc. "
+                "La verificación H3.3 requiere además los esfuerzos demandantes por torsión y alabeo, "
+                "obtenidos mediante IDEA StatiCa Member u otro software de análisis torsional especializado."
+            )
 
     tiene_agujeros = st.checkbox(
         "Existen agujeros de pernos en patines sometidos a tensión",
@@ -2811,6 +2841,8 @@ def mostrar_capitulo_h(
 
             resultado = None
             ruta_usada = "H1"
+            estado_h33 = "NO APLICA"
+            verificacion_incompleta_h33 = False
             if es_hss and abs(Tr) > 1e-12:
                 if torsion_hss is None:
                     raise ValueError("No se pudo determinar la resistencia torsional Tc del HSS.")
@@ -2838,13 +2870,19 @@ def mostrar_capitulo_h(
                     ruta_usada = "H3.2"
                     observacion_torsion = f"Tr/Tc={rt:.4f} > 0.20; se aplicó H3-6."
             elif abs(Tr) > 1e-12:
-                raise ValueError(
-                    "La combinación contiene torsión en un perfil no HSS. H3.3 exige un análisis de esfuerzos "
-                    "torsionales y de alabeo; no existe una interacción automática válida solo con Tr."
+                resultado = calcular_h11(Pr=Pr, Pc=Pc, Mrx=Mrx, Mcx=Mcx, Mry=Mry, Mcy=Mcy)
+                ruta_usada = "H1 + H3.3 pendiente"
+                estado_h33 = "PENDIENTE"
+                verificacion_incompleta_h33 = True
+                observacion_torsion = (
+                    "La interacción axial–flexión fue evaluada mediante H1. La combinación contiene "
+                    "torsión y el elemento es un perfil abierto, por lo que falta completar H3.3. "
+                    "Los esfuerzos por torsión no uniforme y alabeo pueden obtenerse mediante IDEA StatiCa "
+                    "Member u otro software que considere explícitamente estos efectos."
                 )
             else:
                 resultado = calcular_h11(Pr=Pr, Pc=Pc, Mrx=Mrx, Mcx=Mcx, Mry=Mry, Mcy=Mcy)
-                observacion_torsion = "Sin torsión requerida."
+                observacion_torsion = "Sin torsión requerida; H3.3 no aplica."
 
             if tiene_agujeros and tipo_axial == "Tensión" and (abs(Mrx) > 1e-12 or Pr > 1e-12):
                 raise ValueError(
@@ -2853,14 +2891,20 @@ def mostrar_capitulo_h(
                 )
 
             ir = float(resultado.interaccion)
-            estado = "CUMPLE" if ir <= 1.0 else "NO CUMPLE"
+            estado_interaccion = "CUMPLE" if ir <= 1.0 else "NO CUMPLE"
+            if verificacion_incompleta_h33 and estado_interaccion == "CUMPLE":
+                estado_general = "VERIFICACIÓN INCOMPLETA"
+            else:
+                estado_general = estado_interaccion
             resultados_salida.append({
                 "Combinación": nombre,
                 "Tipo axial": tipo_axial,
                 "Ruta": ruta_usada,
                 "Ecuación": resultado.ecuacion,
                 "Interacción": ir,
-                "Estado": estado,
+                "Estado interacción": estado_interaccion,
+                "Estado H3.3": estado_h33,
+                "Estado": estado_general,
                 "Lado Mx": lado_x,
                 "Lado My": lado_y,
                 "Observación": observacion_torsion,
@@ -2878,6 +2922,8 @@ def mostrar_capitulo_h(
                 "Ruta": " / ".join(rutas) if "rutas" in locals() else "—",
                 "Ecuación": "—",
                 "Interacción": None,
+                "Estado interacción": "NO EVALUADA",
+                "Estado H3.3": "NO DETERMINADO",
                 "Estado": "NO EVALUADA",
                 "Lado Mx": "—",
                 "Lado My": "—",
@@ -2889,9 +2935,13 @@ def mostrar_capitulo_h(
         st.warning("No existen combinaciones con nombre para evaluar.")
         return
     df_resultados = pd.DataFrame(resultados_salida)
+    columnas_estado_h = [
+        columna for columna in ("Estado interacción", "Estado H3.3", "Estado")
+        if columna in df_resultados.columns
+    ]
     tabla_resultados_estilizada = (
         df_resultados.style
-        .map(_estilo_estado_h, subset=["Estado"])
+        .map(_estilo_estado_h, subset=columnas_estado_h)
         .map(_estilo_interaccion_h, subset=["Interacción"])
     )
     st.dataframe(tabla_resultados_estilizada, use_container_width=True, hide_index=True)
@@ -2906,8 +2956,17 @@ def mostrar_capitulo_h(
         c3.metric("Interacción", f"{float(gob['Interacción']):,.4f}")
         with c4:
             _tarjeta_estado_h("Estado", str(gob["Estado"]))
-        if float(gob["Interacción"]) > 1.0:
-            st.error("La combinación gobernante no cumple el Capítulo H.")
+        estados_generales = set(df_resultados["Estado"].astype(str).str.upper())
+        if "NO CUMPLE" in estados_generales:
+            st.error("Al menos una combinación no cumple la interacción calculada del Capítulo H.")
+        elif "VERIFICACIÓN INCOMPLETA" in estados_generales:
+            st.warning(
+                "Las interacciones axial–flexión disponibles cumplen, pero existen combinaciones con "
+                "torsión en perfiles abiertos y la comprobación H3.3 está pendiente. Complete el análisis "
+                "con IDEA StatiCa Member u otro software que considere torsión no uniforme y alabeo."
+            )
+        elif "NO EVALUADA" in estados_generales:
+            st.warning("Existen combinaciones que no pudieron evaluarse por falta de resistencias o datos requeridos.")
         elif float(gob["Interacción"]) > 0.95:
             st.warning("La combinación gobernante cumple, pero se encuentra próxima al límite.")
         else:
@@ -2919,14 +2978,23 @@ def mostrar_capitulo_h(
         with st.expander(
             f"{icono_estado} {fila_resultado['Combinación']} — {estado_fila}", expanded=False
         ):
-            _tarjeta_estado_h("Estado de la combinación", estado_fila)
+            ce1, ce2, ce3 = st.columns(3)
+            with ce1:
+                _tarjeta_estado_h("Interacción calculada", str(fila_resultado.get("Estado interacción", "—")))
+            with ce2:
+                _tarjeta_estado_h("H3.3", str(fila_resultado.get("Estado H3.3", "—")))
+            with ce3:
+                _tarjeta_estado_h("Resultado general", estado_fila)
             st.write(f"**Ruta:** {fila_resultado['Ruta']} · **Ecuación:** {fila_resultado['Ecuación']}")
             if fila_resultado["Interacción"] is not None:
                 st.metric("Interacción", f"{float(fila_resultado['Interacción']):,.4f}")
                 detalle = [x for x in desarrollo_salida if x["Combinación"] == fila_resultado["Combinación"]]
                 if detalle:
                     st.dataframe(detalle, use_container_width=True, hide_index=True)
-            st.caption(str(fila_resultado["Observación"]))
+            if str(fila_resultado.get("Estado H3.3", "")).upper() == "PENDIENTE":
+                st.warning(str(fila_resultado["Observación"]))
+            else:
+                st.caption(str(fila_resultado["Observación"]))
 
     resistencias_exportar = pd.DataFrame(filas_cap)
     desarrollo_exportar = pd.DataFrame(desarrollo_salida)
