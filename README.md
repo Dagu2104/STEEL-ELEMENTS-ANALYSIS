@@ -183,3 +183,10 @@ Para disponer de las resistencias en ambos ejes, seleccione cada eje y lado comp
 - H3.3 para perfiles no HSS requiere un análisis de torsión y alabeo que determine los esfuerzos y `Fcr`. La interfaz muestra los límites H3-7 a H3-9, pero no genera una interacción automática usando solamente `Tr`.
 - H4 requiere la resistencia de rotura axial del Capítulo D y la resistencia de rotura por flexión de F13.1 para cada patín. Se identifica la ruta, pero no se aprueba hasta que esté disponible el Capítulo D.
 - H1.3 está preparado en `capitulo_h.py`, pero no se selecciona automáticamente porque requiere una resistencia a LTB calculada específicamente con `Cb=1.0` y las capacidades separadas en el plano y fuera del plano.
+
+## Corrección: cortante en ambos ejes y estados con color
+
+- La resistencia base de G2 se guarda ahora como capacidad de cortante `x-x`, por lo que el Capítulo H puede recuperarla junto con la capacidad `y-y` de G6.
+- El valor almacenado para G2 corresponde conservadoramente al perfil sin rigidizadores transversales.
+- La tabla de resultados del Capítulo H colorea `CUMPLE` en verde, `NO CUMPLE` en rojo y `NO EVALUADA` en amarillo.
+- La combinación gobernante y cada combinación individual muestran una tarjeta de estado con el mismo código de colores.

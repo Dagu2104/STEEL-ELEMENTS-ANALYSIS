@@ -1401,6 +1401,10 @@ def mostrar_ruta_y_diseno_capitulo_g(
                 h=h, tw=tw, d=d,
             )
             _mostrar_resultado_cortante(base, uP, uF)
+            # G2 también debe guardar su resistencia para que el Capítulo H pueda
+            # recuperar simultáneamente Vcx y Vcy. Se almacena conservadoramente
+            # la resistencia del perfil sin rigidizadores transversales.
+            guardar_capacidad_cortante(base, "G2 — sin rigidizadores")
             disponible_base = capacidad_disponible(base.adoptado, metodo)
             Cv_base = 1.0 if base.adoptado.Cv is None else float(base.adoptado.Cv)
 
@@ -2485,6 +2489,54 @@ def _fila_resistencia_h(nombre: str, datos: dict | None, metodo: str,
     }
 
 
+def _estilo_estado_h(valor: object) -> str:
+    """Colorea las celdas de estado en las tablas del Capítulo H."""
+    estado = str(valor).strip().upper()
+    if estado == "CUMPLE":
+        return "background-color: #dcfce7; color: #166534; font-weight: 700;"
+    if estado == "NO CUMPLE":
+        return "background-color: #fee2e2; color: #991b1b; font-weight: 700;"
+    return "background-color: #fef3c7; color: #92400e; font-weight: 700;"
+
+
+def _estilo_interaccion_h(valor: object) -> str:
+    """Colorea la interacción de acuerdo con el límite unitario."""
+    try:
+        ir = float(valor)
+    except (TypeError, ValueError):
+        return ""
+    if ir > 1.0:
+        return "background-color: #fee2e2; color: #991b1b; font-weight: 700;"
+    if ir > 0.95:
+        return "background-color: #fef3c7; color: #92400e; font-weight: 700;"
+    return "background-color: #dcfce7; color: #166534; font-weight: 700;"
+
+
+def _tarjeta_estado_h(etiqueta: str, estado: str) -> None:
+    """Muestra un estado con apariencia de métrica y color semántico."""
+    estado_normalizado = str(estado).strip().upper()
+    if estado_normalizado == "CUMPLE":
+        fondo, borde, texto = "#dcfce7", "#22c55e", "#166534"
+    elif estado_normalizado == "NO CUMPLE":
+        fondo, borde, texto = "#fee2e2", "#ef4444", "#991b1b"
+    else:
+        fondo, borde, texto = "#fef3c7", "#f59e0b", "#92400e"
+    st.markdown(
+        f"""
+        <div style="padding:0.55rem 0.75rem;border-radius:0.55rem;
+                    border-left:0.38rem solid {borde};background:{fondo};">
+          <div style="font-size:0.82rem;color:#4b5563;margin-bottom:0.15rem;">
+            {html.escape(etiqueta)}
+          </div>
+          <div style="font-size:1.65rem;line-height:1.15;font-weight:700;color:{texto};">
+            {html.escape(estado_normalizado)}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def mostrar_capitulo_h(
     *, perfil: str, E: float, Fy: float, geo: dict, fabricacion: str | None,
     cubreplacas: dict, prop: PropiedadesSeccion,
@@ -2837,7 +2889,12 @@ def mostrar_capitulo_h(
         st.warning("No existen combinaciones con nombre para evaluar.")
         return
     df_resultados = pd.DataFrame(resultados_salida)
-    st.dataframe(df_resultados, use_container_width=True, hide_index=True)
+    tabla_resultados_estilizada = (
+        df_resultados.style
+        .map(_estilo_estado_h, subset=["Estado"])
+        .map(_estilo_interaccion_h, subset=["Interacción"])
+    )
+    st.dataframe(tabla_resultados_estilizada, use_container_width=True, hide_index=True)
 
     evaluados = df_resultados[pd.to_numeric(df_resultados["Interacción"], errors="coerce").notna()].copy()
     if not evaluados.empty:
@@ -2847,7 +2904,8 @@ def mostrar_capitulo_h(
         c1.metric("Combinación gobernante", str(gob["Combinación"]))
         c2.metric("Ruta", str(gob["Ruta"]))
         c3.metric("Interacción", f"{float(gob['Interacción']):,.4f}")
-        c4.metric("Estado", str(gob["Estado"]))
+        with c4:
+            _tarjeta_estado_h("Estado", str(gob["Estado"]))
         if float(gob["Interacción"]) > 1.0:
             st.error("La combinación gobernante no cumple el Capítulo H.")
         elif float(gob["Interacción"]) > 0.95:
@@ -2856,9 +2914,12 @@ def mostrar_capitulo_h(
             st.success("Las combinaciones evaluadas cumplen el Capítulo H.")
 
     for fila_resultado in resultados_salida:
+        estado_fila = str(fila_resultado["Estado"])
+        icono_estado = "🟢" if estado_fila == "CUMPLE" else ("🔴" if estado_fila == "NO CUMPLE" else "🟠")
         with st.expander(
-            f"{fila_resultado['Combinación']} — {fila_resultado['Estado']}", expanded=False
+            f"{icono_estado} {fila_resultado['Combinación']} — {estado_fila}", expanded=False
         ):
+            _tarjeta_estado_h("Estado de la combinación", estado_fila)
             st.write(f"**Ruta:** {fila_resultado['Ruta']} · **Ecuación:** {fila_resultado['Ecuación']}")
             if fila_resultado["Interacción"] is not None:
                 st.metric("Interacción", f"{float(fila_resultado['Interacción']):,.4f}")
